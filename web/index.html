@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>SSTV Studio · 本地慢扫描电视工具</title>
+  <meta name="description" content="100% 离线运行的 SSTV 慢扫描电视工具：图片转音频发射、音频转图片接收。无需联网。" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">📡</span>
+      <div>
+        <h1>SSTV Studio</h1>
+        <p>本地慢扫描电视工具 · 100% 离线运行</p>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="功能切换">
+      <button class="tab active" data-tab="tx" role="tab" aria-selected="true">发射 TX</button>
+      <button class="tab" data-tab="rx" role="tab" aria-selected="false">接收 RX</button>
+      <button class="tab" data-tab="help" role="tab" aria-selected="false">说明</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ===================== TX ===================== -->
+    <section id="tx" class="panel active" role="tabpanel" aria-label="发射">
+      <div class="card">
+        <h2><span class="dot"></span>图片 → 音频（发射）</h2>
+
+        <div class="dropzone" id="tx-drop">
+          <input type="file" id="tx-file" accept="image/*" hidden />
+          <p>拖入图片到此处，或
+            <button class="link" id="tx-pick" type="button">选择文件</button>
+          </p>
+          <button class="btn ghost" id="tx-test" type="button">生成测试图</button>
+        </div>
+
+        <div class="row">
+          <label>模式
+            <select id="tx-mode" aria-label="发射模式"></select>
+          </label>
+          <div class="mode-info" id="tx-mode-info"></div>
+        </div>
+
+        <canvas id="tx-preview" class="preview" width="320" height="256" aria-label="源图像预览"></canvas>
+
+        <div class="actions">
+          <button class="btn primary" id="tx-gen" type="button">生成音频</button>
+          <button class="btn" id="tx-play" type="button" disabled>▶ 试听</button>
+          <button class="btn" id="tx-wav" type="button" disabled>⤓ 导出 WAV</button>
+        </div>
+        <p class="status" id="tx-status" role="status"></p>
+      </div>
+    </section>
+
+    <!-- ===================== RX ===================== -->
+    <section id="rx" class="panel" role="tabpanel" aria-label="接收">
+      <div class="card">
+        <h2><span class="dot"></span>音频 → 图片（接收）</h2>
+
+        <div class="seg" role="radiogroup" aria-label="信号来源">
+          <button class="seg-btn active" data-src="file" role="radio" aria-checked="true">文件</button>
+          <button class="seg-btn" data-src="mic" role="radio" aria-checked="false">麦克风</button>
+        </div>
+
+        <div id="rx-file" class="src-pane">
+          <input type="file" id="rx-file-input" accept="audio/*" hidden />
+          <button class="btn" id="rx-pick" type="button">选择音频文件</button>
+        </div>
+
+        <div id="rx-mic" class="src-pane hidden">
+          <button class="btn danger" id="rx-rec" type="button">● 开始录音</button>
+          <div class="meter" aria-hidden="true"><div class="meter-fill" id="rx-meter"></div></div>
+          <span id="rx-rec-time">00:00</span>
+        </div>
+
+        <div class="row">
+          <label>解码模式
+            <select id="rx-mode" aria-label="解码模式">
+              <option value="auto">自动识别 (VIS)</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button class="btn primary" id="rx-decode" type="button" disabled>🔍 解码</button>
+          <button class="btn" id="rx-png" type="button" disabled>⤓ 导出 PNG</button>
+        </div>
+        <p class="status" id="rx-status" role="status"></p>
+
+        <canvas id="rx-preview" class="preview" width="320" height="256" aria-label="解码结果预览"></canvas>
+      </div>
+    </section>
+
+    <!-- ===================== HELP ===================== -->
+    <section id="help" class="panel" role="tabpanel" aria-label="说明">
+      <div class="card">
+        <h2><span class="dot"></span>使用说明</h2>
+        <p class="mode-info">
+          本工具在浏览器内本地完成全部音频合成与解码，<b>不依赖任何网络</b>。
+          发射：把图片编码为 SSTV 音频（FM 单音，1500–2300&nbsp;Hz）用于播放或导出；
+          接收：从音频文件或麦克风还原图像。
+        </p>
+        <div class="help-grid">
+          <div class="help-card">
+            <h3>支持的制式</h3>
+            <p>Martin M1 / M2、Scottie S1 / S2、Robot 36、PD90。前四种为 RGB 直传；后两种为 YUV（色度半分辨率）。</p>
+          </div>
+          <div class="help-card">
+            <h3>频率映射</h3>
+            <p>黑 1500&nbsp;Hz，白 2300&nbsp;Hz，同步 1200&nbsp;Hz，VIS 引导 1900&nbsp;Hz。与 pySSTV 0.5.9 兼容。</p>
+          </div>
+          <div class="help-card">
+            <h3>离线运行</h3>
+            <p>直接双击 <code>index.html</code> 即可使用文件发射/接收与导出。全部为本地计算。</p>
+          </div>
+          <div class="help-card">
+            <h3>麦克风权限</h3>
+            <p>浏览器要求安全上下文。<code>getUserMedia</code> 在 <code>file://</code> 常被拦截，需用本地服务器打开（见下方提示）。</p>
+          </div>
+        </div>
+        <div class="note">
+          <b>提示：</b>若需使用麦克风（实时接收），请在本目录运行
+          <code>python -m http.server 8000</code> 然后访问
+          <code>http://localhost:8000</code>。文件导入、播放、WAV/PNG 导出在纯本地（file://）下均可正常工作。
+          长时长制式（如 Martin M1 ≈ 115&nbsp;s）解码需数秒，请耐心等待进度提示。
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>SSTV Studio · 纯前端离线工具 · 算法与 pySSTV 0.5.9 兼容</footer>
+
+  <div id="overlay" class="overlay hidden" role="alert">
+    <div class="spinner" aria-hidden="true"></div>
+    <p id="overlay-msg">处理中…</p>
+  </div>
+
+  <script src="sstv-engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
