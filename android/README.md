@@ -135,12 +135,18 @@ bash android/tools/ci-build-apk.sh
 
 脚本是幂等的 —— 第二次跑会复用已装好的 SDK，只重跑 Gradle。
 
-产物：
+产物（文件名里的版本号取自 `app/build.gradle.kts` 的 `versionName` —— 制品区里
+堆着好几个同名 APK 时，光看名字分不出新旧）：
 
 ```
-android/app/build/outputs/apk/debug/app-debug.apk
-android/app/build/outputs/apk/release/app-release.apk   # 无正式签名时用 debug 钥匙签，可直接安装
+android/app/build/outputs/apk/debug/sstv-<版本>-debug.apk
+android/app/build/outputs/apk/release/sstv-<版本>-release.apk   # 无正式签名时用 debug 钥匙签，可直接安装
 ```
+
+> **签名一致性**：没有 `keystore.properties` 时，release 走的是**本机的**调试签名。
+> 不同机器（含 Gitee Go 构建机）各自生成的那把调试钥匙并不相同，所以"本地包"与
+> "云端包"互相覆盖安装会报"应用未安装 / 签名不一致"，需要先卸载旧版。想彻底避免，
+> 就建一把正式签名钥匙并配好 `keystore.properties`。
 
 只想要 debug 包，或者想复用别处的 SDK：
 

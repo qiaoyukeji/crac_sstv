@@ -492,7 +492,15 @@ SSTV 只占 700–2700 Hz，而解码器的 FFT 是**全信号** FFT，代价为
 
 **亚 0.1 dB 的一致性**，证明 JS 引擎是**逐行忠实移植**而非"大致相似"。
 
-Swift / Kotlin 版本的验证方式略有不同：本机没有 Xcode / JDK 工具链，因此改用 **Python 镜像脚本**（`test_parity_ref.py` 与 `test_jfif_color.py`）逐字节复刻 Swift/Kotlin 的算法（含 JFIF 色彩管线、居中 8 点平滑、`np.gradient` 边界处理、Double 内部精度），在神谕框架内跑出结果为 **M1 = 35.73 dB / PD90 = 26.84 dB**，与嵌入 Swift XCTest / Kotlin JUnit 的基线（35.73 / 26.76）吻合。这证明 Swift、Kotlin 的移植算法正确，但**仍需在 Xcode / Android Studio 中实际编译运行以排除语法与平台问题**。
+Swift / Kotlin 版本的验证方式略有不同。本机没有 Xcode（Windows 上跑不了 iOS 工具链），所以 Swift 侧改用 **Python 镜像脚本**（`test_parity_ref.py` 与 `test_jfif_color.py`）逐字节复刻其算法（含 JFIF 色彩管线、居中 8 点平滑、`np.gradient` 边界处理、Double 内部精度），在神谕框架内跑出结果为 **M1 = 35.73 dB / PD90 = 26.84 dB**，与嵌入 Swift XCTest 的基线（35.73 / 26.76）吻合；**Swift 版仍需在 Xcode 里实际编译运行**以排除语法与平台问题。
+
+Kotlin 侧则**不依赖镜像脚本** —— 本机就装有 JDK 17 与 Android SDK，`ci-build-apk.sh` 能把 `:sstv-engine:test` 与 APK 打包一并跑完（实测约 1 分半），所以算法库单测与整包编译在本地就能验证，无需等云端：
+
+```bash
+export JAVA_HOME="<JDK 17 路径>"
+export ANDROID_SDK_ROOT="<Android SDK 路径>"
+bash android/tools/ci-build-apk.sh     # 与 Gitee Go 用的是同一个脚本
+```
 
 ### 7.4 如何复现
 
