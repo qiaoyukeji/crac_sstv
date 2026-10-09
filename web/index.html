@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f14" />
+  <meta name="color-scheme" content="dark" />
   <title>SSTV Studio · 本地慢扫描电视工具</title>
   <meta name="description" content="100% 离线运行的 SSTV 慢扫描电视工具：图片转音频发射、音频转图片接收。无需联网。" />
   <script>
@@ -27,30 +29,78 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo" aria-hidden="true">📡</span>
-      <div>
+  <!--
+    图标精灵：内联 SVG 而不是 emoji / 图标字体。
+    · emoji 在不同系统上字形、颜色、基线都不一致，是"网页感"最明显的来源之一；
+    · 图标字体要额外下载一个文件，和"完全离线"的定位相冲。
+    全部用 stroke=currentColor 绘制，跟着文字颜色走，天然适配深色主题。
+  -->
+  <svg class="sprite" aria-hidden="true" focusable="false" width="0" height="0"><defs>
+    <symbol id="i-logo" viewBox="0 0 24 24">
+      <circle cx="12" cy="19" r="1.7" />
+      <path d="M8.1 15.3a5.6 5.6 0 0 1 7.8 0" />
+      <path d="M5.2 12.1a9.7 9.7 0 0 1 13.6 0" />
+      <path d="M2.3 8.9a13.8 13.8 0 0 1 19.4 0" />
+    </symbol>
+    <symbol id="i-image" viewBox="0 0 24 24">
+      <rect x="3" y="4.6" width="18" height="14.8" rx="3" />
+      <circle cx="8.5" cy="9.8" r="1.5" />
+      <path d="M3.5 17.6l4.4-4.2a2 2 0 0 1 2.7 0l3.1 3" />
+      <path d="M13.3 14.9l2.1-2a2 2 0 0 1 2.7 0l2.4 2.3" />
+    </symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24">
+      <path d="M2.6 12h2.6l2-6.4 3.1 12.8 2.6-9.4 1.7 5.4 1.6-2.4h5.6" />
+    </symbol>
+    <symbol id="i-info" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11.2v5.4" />
+      <path d="M12 7.7v.5" />
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <path d="M7.7 5.1l10.6 6.9-10.6 6.9z" />
+    </symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24">
+      <rect x="6.4" y="6.4" width="11.2" height="11.2" rx="2.4" />
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24">
+      <path d="M12 3.6v10.6" />
+      <path d="M7.6 10.1L12 14.5l4.4-4.4" />
+      <path d="M4.6 16.4v1.6a2.4 2.4 0 0 0 2.4 2.4h10a2.4 2.4 0 0 0 2.4-2.4v-1.6" />
+    </symbol>
+    <symbol id="i-search" viewBox="0 0 24 24">
+      <circle cx="10.7" cy="10.7" r="6.4" />
+      <path d="M15.5 15.5l5 5" />
+    </symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24">
+      <rect x="9" y="2.9" width="6" height="11.2" rx="3" />
+      <path d="M5.4 11.4a6.6 6.6 0 0 0 13.2 0" />
+      <path d="M12 18v3.1" />
+    </symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24">
+      <path d="M6.6 9.6L12 15l5.4-5.4" />
+    </symbol>
+  </defs></svg>
+
+  <header class="appbar">
+    <div class="appbar-inner">
+      <span class="app-icon" aria-hidden="true"><svg class="ico ico-lg"><use href="#i-logo" /></svg></span>
+      <div class="brand-txt">
         <h1>SSTV Studio</h1>
         <p class="only-web">本地慢扫描电视工具 · 100% 离线运行</p>
         <p class="only-app">慢扫描电视收发 · 离线运行</p>
       </div>
     </div>
-    <nav class="tabs" role="tablist" aria-label="功能切换">
-      <button class="tab active" data-tab="tx" role="tab" aria-selected="true">发射 TX</button>
-      <button class="tab" data-tab="rx" role="tab" aria-selected="false">接收 RX</button>
-      <button class="tab" data-tab="help" role="tab" aria-selected="false">说明</button>
-    </nav>
   </header>
 
   <main>
     <!-- ===================== TX ===================== -->
     <section id="tx" class="panel active" role="tabpanel" aria-label="发射">
       <div class="card">
-        <h2><span class="dot"></span>图片 → 音频（发射）</h2>
+        <h2><span class="dot"></span>图片 → 音频</h2>
 
         <div class="dropzone" id="tx-drop">
           <input type="file" id="tx-file" accept="image/*" hidden />
+          <span class="dz-ico" aria-hidden="true"><svg class="ico ico-lg"><use href="#i-image" /></svg></span>
           <p>
             <span class="only-web">拖入图片到此处，或 </span>
             <span class="only-app">还没有图片，</span>
@@ -59,21 +109,29 @@
           <button class="btn ghost" id="tx-test" type="button">生成测试图</button>
         </div>
 
-        <div class="row">
-          <label>模式
-            <select id="tx-mode" aria-label="发射模式"></select>
-          </label>
-          <label>画面适配
-            <select id="tx-fit" aria-label="画面适配方式">
-              <option value="contain">适应 · 完整不裁剪</option>
-              <option value="cover">填充 · 裁掉多余</option>
-              <option value="stretch">拉伸 · 铺满（会变形）</option>
-            </select>
-          </label>
-          <div class="mode-info" id="tx-mode-info"></div>
+        <div class="fields">
+          <div class="field">
+            <label class="field-lbl" for="tx-mode">模式</label>
+            <div class="select-wrap">
+              <select id="tx-mode" aria-label="发射模式"></select>
+              <svg class="chev" aria-hidden="true"><use href="#i-chev" /></svg>
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-lbl" for="tx-fit">画面适配</label>
+            <div class="select-wrap">
+              <select id="tx-fit" aria-label="画面适配方式">
+                <option value="contain">适应 · 完整不裁剪</option>
+                <option value="cover">填充 · 裁掉多余</option>
+                <option value="stretch">拉伸 · 铺满（会变形）</option>
+              </select>
+              <svg class="chev" aria-hidden="true"><use href="#i-chev" /></svg>
+            </div>
+          </div>
         </div>
+        <div class="mode-info" id="tx-mode-info"></div>
 
-        <div class="stage" id="tx-stage">
+        <div class="stage empty" id="tx-stage">
           <canvas id="tx-preview" class="preview" width="320" height="256" aria-label="待发送图像预览"></canvas>
           <div class="send-overlay hidden" id="tx-send" role="progressbar"
                aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="发送进度">
@@ -85,9 +143,17 @@
         <p class="fit-note" id="tx-fit-note"></p>
 
         <div class="actions">
-          <button class="btn primary" id="tx-gen" type="button">生成音频</button>
-          <button class="btn" id="tx-play" type="button" disabled>▶ 发送</button>
-          <button class="btn" id="tx-wav" type="button" disabled>⤓ 导出 WAV</button>
+          <button class="btn primary wide" id="tx-gen" type="button">
+            <svg class="ico" aria-hidden="true"><use href="#i-wave" /></svg><span>生成音频</span>
+          </button>
+          <button class="btn" id="tx-play" type="button" disabled>
+            <svg class="ico ico-fill ico-idle" aria-hidden="true"><use href="#i-play" /></svg>
+            <svg class="ico ico-fill ico-live" aria-hidden="true"><use href="#i-stop" /></svg>
+            <span class="lbl">发送</span>
+          </button>
+          <button class="btn" id="tx-wav" type="button" disabled>
+            <svg class="ico" aria-hidden="true"><use href="#i-download" /></svg><span>导出 WAV</span>
+          </button>
         </div>
         <p class="status" id="tx-status" role="status"></p>
       </div>
@@ -96,7 +162,7 @@
     <!-- ===================== RX ===================== -->
     <section id="rx" class="panel" role="tabpanel" aria-label="接收">
       <div class="card">
-        <h2><span class="dot"></span>音频 → 图片（接收）</h2>
+        <h2><span class="dot"></span>音频 → 图片</h2>
 
         <div class="seg" role="radiogroup" aria-label="信号来源">
           <button class="seg-btn active" data-src="file" role="radio" aria-checked="true">文件</button>
@@ -105,44 +171,68 @@
 
         <div id="rx-file" class="src-pane">
           <input type="file" id="rx-file-input" accept="audio/*" hidden />
-          <button class="btn" id="rx-pick" type="button">选择音频文件</button>
+          <button class="btn wide" id="rx-pick" type="button">
+            <svg class="ico" aria-hidden="true"><use href="#i-wave" /></svg><span>选择音频文件</span>
+          </button>
         </div>
 
         <div id="rx-mic" class="src-pane hidden">
-          <button class="btn danger" id="rx-rec" type="button">● 开始录音</button>
-          <div class="meter" aria-hidden="true"><div class="meter-fill" id="rx-meter"></div></div>
-          <span id="rx-rec-time">00:00</span>
-          <div class="row">
-            <label class="check">
-              <input type="checkbox" id="rx-live-on" checked />
-              <span>实时逐行成像（边接收边出画面）</span>
-            </label>
+          <button class="btn primary wide" id="rx-rec" type="button">
+            <svg class="ico ico-fill ico-idle" aria-hidden="true"><use href="#i-mic" /></svg>
+            <svg class="ico ico-fill ico-live" aria-hidden="true"><use href="#i-stop" /></svg>
+            <span class="lbl">开始录音</span>
+          </button>
+
+          <div class="meter-row">
+            <div class="meter" aria-hidden="true"><div class="meter-fill" id="rx-meter"></div></div>
+            <span id="rx-rec-time">00:00</span>
           </div>
-          <div class="row">
-            <label class="check">
+
+          <div class="group">
+            <label class="toggle-row">
+              <span class="toggle-txt">
+                <b>实时逐行成像</b>
+                <small>边接收边把画面一行行画出来</small>
+              </span>
+              <input type="checkbox" id="rx-live-on" checked />
+              <span class="toggle" aria-hidden="true"></span>
+            </label>
+            <label class="toggle-row">
+              <span class="toggle-txt">
+                <b>接收完成自动停止</b>
+                <small>整幅收满后自动结束录音</small>
+              </span>
               <input type="checkbox" id="rx-auto-stop" checked />
-              <span>接收完成自动停止</span>
+              <span class="toggle" aria-hidden="true"></span>
             </label>
           </div>
           <p class="fit-note" id="rx-auto-hint"></p>
           <div id="rx-mic-diag" class="diag hidden" role="alert"></div>
         </div>
 
-        <div class="row">
-          <label>解码模式
-            <select id="rx-mode" aria-label="解码模式">
-              <option value="auto">自动识别 (VIS)</option>
-            </select>
-          </label>
+        <div class="fields">
+          <div class="field">
+            <label class="field-lbl" for="rx-mode">解码模式</label>
+            <div class="select-wrap">
+              <select id="rx-mode" aria-label="解码模式">
+                <option value="auto">自动识别 (VIS)</option>
+              </select>
+              <svg class="chev" aria-hidden="true"><use href="#i-chev" /></svg>
+            </div>
+          </div>
         </div>
 
         <div class="actions">
-          <button class="btn primary" id="rx-decode" type="button" disabled>🔍 解码</button>
-          <button class="btn" id="rx-png" type="button" disabled>⤓ 导出 PNG</button>
+          <button class="btn primary wide" id="rx-decode" type="button" disabled>
+            <svg class="ico" aria-hidden="true"><use href="#i-search" /></svg><span>解码</span>
+          </button>
+          <button class="btn wide" id="rx-png" type="button" disabled>
+            <svg class="ico" aria-hidden="true"><use href="#i-download" /></svg><span>导出 PNG</span>
+          </button>
         </div>
         <p class="status" id="rx-status" role="status"></p>
 
-        <div class="stage" id="rx-stage">
+        <div class="stage empty" id="rx-stage">
           <canvas id="rx-preview" class="preview" width="320" height="256"
                   aria-label="解码结果预览（接收时逐行成像）"></canvas>
           <div class="recv-overlay hidden" id="rx-live" role="status" aria-live="polite">
@@ -160,7 +250,7 @@
         <h2><span class="dot"></span>使用说明</h2>
 
         <!-- ---------------- 网页版 ---------------- -->
-        <p class="mode-info only-web">
+        <p class="mode-info help-intro only-web">
           本工具在浏览器内本地完成全部音频合成与解码，<b>不依赖任何网络</b>。
           发射：把图片编码为 SSTV 音频（FM 单音，1500–2300&nbsp;Hz）用于播放或导出；
           接收：从音频文件或麦克风还原图像。
@@ -208,7 +298,7 @@
         </div>
 
         <!-- ---------------- 安卓 App 版 ---------------- -->
-        <p class="mode-info only-app">
+        <p class="mode-info help-intro only-app">
           本应用在手机本地完成全部音频合成与解码，<b>不申请联网权限</b>。
           发射：把照片编码为 SSTV 音频（FM 单音，1500–2300&nbsp;Hz），用手机对着电台送话器播放；
           接收：用麦克风对准电台喇叭，把信号还原成图片。
@@ -248,14 +338,30 @@
           也可以在「解码模式」里手动指定制式后重试，或切到「文件」导入对讲机的录音来解码。<br />
           <b>长制式要有耐心：</b>Martin M1 整幅约 115&nbsp;s，这本来就是它的传输时长，边收边看即可。
         </div>
+
+        <p class="about">SSTV Studio · 全部处理在本机完成 · 算法与 pySSTV 0.5.9 兼容</p>
       </div>
     </section>
   </main>
 
-  <footer>
-    <span class="only-web">SSTV Studio · 纯前端离线工具 · 算法与 pySSTV 0.5.9 兼容</span>
-    <span class="only-app">SSTV Studio · 完全离线运行 · 算法与 pySSTV 0.5.9 兼容</span>
-  </footer>
+  <!-- 底部导航：原生 App 的主导航位置。放在 DOM 里只有一份，避免"顶栏一份、
+       底栏一份"导致自动点击时命中隐藏元素。 -->
+  <nav class="tabbar" role="tablist" aria-label="功能切换">
+    <div class="tabbar-inner">
+      <button class="tab active" data-tab="tx" role="tab" aria-selected="true">
+        <svg class="ico" aria-hidden="true"><use href="#i-image" /></svg>
+        <span>发射</span>
+      </button>
+      <button class="tab" data-tab="rx" role="tab" aria-selected="false">
+        <svg class="ico" aria-hidden="true"><use href="#i-wave" /></svg>
+        <span>接收</span>
+      </button>
+      <button class="tab" data-tab="help" role="tab" aria-selected="false">
+        <svg class="ico" aria-hidden="true"><use href="#i-info" /></svg>
+        <span>说明</span>
+      </button>
+    </div>
+  </nav>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 

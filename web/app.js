@@ -43,6 +43,37 @@
     el.className = 'status' + (kind ? ' ' + kind : '');
   }
 
+  /**
+   * 设置"有状态的按钮"的文案与图标。
+   *
+   * 按钮里放的是「两枚图标 + 一个 .lbl」，靠 .playing 类切换（CSS 负责显隐）：
+   * 这样图标是矢量描边、跟文字同色，而不像 ▶ / ■ 那样各系统字形不一。
+   * 文案只写进 .lbl，不碰按钮的 textContent —— 按钮里还有 <svg>，整块覆盖会把
+   * 图标一起抹掉。
+   */
+  function setBtn(btn, label, playing) {
+    if (!btn) return;
+    var l = btn.querySelector('.lbl');
+    if (l) l.textContent = label; else btn.textContent = label;
+    btn.classList.toggle('playing', !!playing);
+  }
+
+  /**
+   * 触感反馈。安卓 WebView 与部分浏览器支持 navigator.vibrate，
+   * 桌面浏览器上是空实现（不报错）。之所以要做：点按有轻微震动是"原生控件"
+   * 的体感特征之一，纯视觉反馈在手机上总觉得"隔了一层"。
+   */
+  function haptic(ms) {
+    try { if (navigator.vibrate) navigator.vibrate(ms || 8); } catch (e) { /* noop */ }
+  }
+  document.addEventListener('pointerdown', function (e) {
+    var t = e.target;
+    while (t && t.nodeType === 1) {
+      if (t.tagName === 'BUTTON' && !t.disabled) { haptic(8); return; }
+      t = t.parentNode;
+    }
+  }, { passive: true });
+
   // ------------------------------------------------------ 原生桥 / 浮动提示 --
   // 浏览器版与安卓壳 App 版跑的是同一份前端。唯一判据是 window.SSTVNative 在不在 ——
   // 那是 MainActivity 用 addJavascriptInterface 注入的桥对象，只有壳 App 里有。
@@ -176,6 +207,8 @@
       ['tx', 'rx', 'help'].forEach(function (name) {
         $('#' + name).classList.toggle('active', name === target);
       });
+      // 切页回到顶部：原生 App 换标签是新开一屏，不会"继承"上一屏的滚动位置
+      window.scrollTo(0, 0);
     });
   });
 
@@ -415,6 +448,7 @@
 
     // preview（显示的就是真正会被编码的那张位图，黑边/裁剪一目了然）
     var pv = $('#tx-preview');
+    $('#tx-stage').classList.remove('empty');   // 有图了，换掉"空槽"底纹
     pv.width = txMode.width;
     pv.height = txMode.height;
     pv.style.aspectRatio = txMode.width + ' / ' + txMode.height;
@@ -530,7 +564,7 @@
   // ------------------------------------------------------------ playback --
   function resetPlayButton() {
     var b = $('#tx-play');
-    b.textContent = '▶ 发送';
+    setBtn(b, '发送', false);
     b.classList.remove('danger');
   }
 
@@ -547,7 +581,7 @@
       playSrc.connect(playCtx.destination);
       playSrc.onended = function () { stopPlayback(); };
       playSrc.start(0);
-      btn.textContent = '■ 停止发送';
+      setBtn(btn, '停止发送', true);
       btn.classList.add('danger');
       beginSendOverlay();
       txRaf = requestAnimationFrame(tickSend);
@@ -833,6 +867,7 @@
   /** 新一幅画面开始时铺"待机底"：暗底 + 细横线。 */
   function liveInitCanvas(w, h) {
     var pv = $('#rx-preview');
+    $('#rx-stage').classList.remove('empty');
     pv.width = w; pv.height = h;
     pv.style.aspectRatio = w + ' / ' + h;
     var g = pv.getContext('2d');
@@ -1186,7 +1221,11 @@
       livePaintOn = !!liveOn;
 
       btn.disabled = false;
-      btn.textContent = '■ 停止录音';
+      // 录起来之后按钮才转红："红"在这里表示"正在进行、可以停"，而不是"危险"。
+      // 常态用主色（和"生成音频""解码"一致），否则一个整宽的红色按钮会读成警告。
+      btn.classList.remove('primary');
+      btn.classList.add('danger');
+      setBtn(btn, '停止录音', true);
       renderMicDiag(null);                          // 已成功，清掉诊断提示
       setStatus($('#rx-status'), liveDec
         ? (liveOn
@@ -1207,7 +1246,10 @@
     try { recProc && recProc.disconnect(); } catch (e) { /* noop */ }
     try { recSink && recSink.disconnect(); } catch (e) { /* noop */ }
     if (recStream) { recStream.getTracks().forEach(function (t) { t.stop(); }); recStream = null; }
-    $('#rx-rec').textContent = '● 开始录音';
+    var recBtn = $('#rx-rec');
+    recBtn.classList.remove('danger');
+    recBtn.classList.add('primary');
+    setBtn(recBtn, '开始录音', false);
     $('#rx-meter').style.width = '0%';
 
     // 先收尾实时解码器（此后不会再有音频块进来），再去做重采样等耗时工作
@@ -1334,6 +1376,7 @@
    */
   function renderDecoded(decoded) {
     var pv = $('#rx-preview');
+    $('#rx-stage').classList.remove('empty');
     pv.width = decoded.width;
     pv.height = decoded.height;
     pv.style.aspectRatio = decoded.width + ' / ' + decoded.height;

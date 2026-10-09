@@ -77,6 +77,10 @@ SSTV（Slow-Scan Television，慢扫描电视）是业余无线电的一项图�
 - **App 模式两套文案**：同一份 `index.html` 按 `window.SSTVNative` 是否存在切换
   `app-shell` / `web-shell`，App 里不再出现"装根证书 / 双击 index.html / 改站点权限"这类网页说明
 - **接收完成自动停止**：麦克风接收时收满整幅自动结束录音（判据来自解码器的帧时间轴，不是定时器）
+- **原生结构**：主导航在**底部 Tab 栏**（原生 App 的位置，不再是一排网页 pill），
+  顶部只留一条紧凑 app bar；控件用原生语汇——开关（switch）替裸 checkbox、
+  下拉做成列表行、主操作是整宽按钮；图标全部是内联 SVG（emoji 字形与配色各系统不一，
+  是最明显的网页破绽）；点按有缩放与触感反馈，切页回到顶部
 - **不申请 `INTERNET` 权限** —— 把"100% 离线"从代码承诺升级为系统级事实
 - **Gitee Go 云打包**：推送到 `main` 自动出 APK，本地不需要装 Android Studio
 

@@ -194,9 +194,13 @@ const isBlack = (p) => p.r < 20 && p.g < 20 && p.b < 20;
   await page.waitForTimeout(200);
   check('停止后遮罩收起', await page.evaluate(
     () => document.querySelector('#tx-send').classList.contains('hidden')));
-  check('停止后按钮回到"▶ 发送"',
-    (await page.textContent('#tx-play')).trim() === '▶ 发送',
+  // 按钮文案现在只写在 .lbl 里（图形部分是内联 SVG，不参与 textContent），
+  // 所以这里断言"回到 发送"而不是原先带 ▶ 的整串。
+  check('停止后按钮回到「发送」',
+    (await page.textContent('#tx-play')).trim() === '发送',
     await page.textContent('#tx-play'));
+  check('停止后按钮不再是"播放中"状态',
+    !(await page.getAttribute('#tx-play', 'class') || '').includes('playing'));
   check('停止后进度归零', await page.getAttribute('#tx-send', 'aria-valuenow') === '0');
 
   // -------------------------------------------------------------- 3. 说明页

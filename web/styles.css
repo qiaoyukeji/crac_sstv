@@ -1,18 +1,30 @@
 /* ===========================================================================
-   SSTV Studio — design system
-   Dark "oscilloscope / ham-radio" aesthetic. WCAG-AA contrast, 44px targets,
-   reduced-motion aware. Pure system fonts (fully offline, no network).
+   SSTV Studio — design system (原生 App 取向)
+
+   目标：在手机上看、装进安卓 WebView 里，都不露"这底下是网页"。
+   具体落点：
+     · 主导航在**底部**（原生 App 的位置），顶部只留一条紧凑 app bar
+     · 图标全部用内联 SVG（emoji 字形/配色各系统不一，是最明显的网页痕迹）
+     · 控件用原生语汇：开关（switch）、列表行（list row）、整宽主按钮
+     · 点按有反馈（缩放 + 触感），面板切换有位移
+     · 让开刘海屏 / 手势条安全区；桌面浏览器上收窄成"手机应用"宽度居中
+
+   深色 "oscilloscope / ham-radio" 配色，WCAG-AA 对比度，44px 触控目标，
+   尊重 prefers-reduced-motion。纯系统字体，完全离线。
    =========================================================================== */
 :root {
+  color-scheme: dark;
+
   /* color tokens */
   --bg: #0b0f14;
-  --bg-grad: radial-gradient(1200px 600px at 70% -10%, #11202b 0%, #0b0f14 60%);
-  --surface: #121821;
+  --bg-grad: radial-gradient(1100px 520px at 72% -12%, #12222e 0%, #0b0f14 62%);
+  --surface: #131a23;
   --surface-2: #18212e;
-  --border: #243040;
-  --border-strong: #314257;
-  --text: #e6edf3;
-  --muted: #93a1b3;
+  --surface-3: #1f2b3a;
+  --border: #22303f;
+  --border-strong: #32435a;
+  --text: #e8eff5;
+  --muted: #93a3b6;
   --primary: #2dd4bf;
   --primary-strong: #14b8a6;
   --primary-ink: #06231f;
@@ -25,9 +37,13 @@
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px;
 
   /* radii & shadow */
-  --r-sm: 8px; --r-md: 12px; --r-lg: 18px;
-  --shadow: 0 10px 30px rgba(0,0,0,.35);
-  --ring: 0 0 0 3px rgba(45,212,191,.35);
+  --r-sm: 10px; --r-md: 14px; --r-lg: 18px;
+  --shadow: 0 12px 32px rgba(0,0,0,.34);
+  --ring: 0 0 0 3px rgba(45,212,191,.32);
+
+  /* 应用外壳尺寸：桌面端据此收窄成"手机"版心 */
+  --app-w: 640px;
+  --tabbar-h: 60px;
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
           "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
@@ -45,109 +61,181 @@ body {
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  overscroll-behavior-y: none;
 }
 
-/* ----------------------------------------------------------- top bar ----- */
-.topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: var(--s4);
-  padding: var(--s4) var(--s6);
-  border-bottom: 1px solid var(--border);
-  background: rgba(11,15,20,.7);
-  backdrop-filter: blur(8px);
+/* ------------------------------------------------------- 图标（SVG 精灵）-- */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.ico {
+  width: 20px; height: 20px; flex: none; display: block;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.ico-fill { fill: currentColor; stroke: none; }
+.ico-lg { width: 24px; height: 24px; }
+
+/* 同一个按钮里的"未激活 / 激活"两枚图标，靠 .playing 切换 */
+.ico-live { display: none; }
+.btn.playing .ico-idle { display: none; }
+.btn.playing .ico-live { display: block; }
+
+/* ------------------------------------------------------------- app bar --- */
+.appbar {
   position: sticky; top: 0; z-index: 20;
-  flex-wrap: wrap;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: rgba(11, 15, 20, .8);
+  backdrop-filter: blur(14px) saturate(140%);
+  border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: var(--s3); }
-.logo {
-  font-size: 26px; line-height: 1;
-  width: 44px; height: 44px; display: grid; place-items: center;
-  background: var(--surface-2); border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
+.appbar-inner {
+  max-width: var(--app-w); margin: 0 auto;
+  min-height: 60px;
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s4);
 }
-.brand h1 { font-size: 18px; margin: 0; letter-spacing: .3px; }
-.brand p { margin: 0; font-size: 12px; color: var(--muted); }
-
-.tabs { display: flex; gap: var(--s2); }
-.tab {
-  min-height: 44px; padding: 0 var(--s5);
-  background: var(--surface); color: var(--muted);
-  border: 1px solid var(--border); border-radius: 999px;
-  font-size: 14px; font-weight: 600; cursor: pointer;
-  transition: all .15s ease;
+.app-icon {
+  width: 38px; height: 38px; flex: none; border-radius: 11px;
+  display: grid; place-items: center;
+  color: var(--primary-ink);
+  background: linear-gradient(148deg, var(--primary), var(--primary-strong));
+  box-shadow: 0 4px 14px rgba(45, 212, 191, .26);
 }
-.tab:hover { color: var(--text); border-color: var(--border-strong); }
-.tab.active { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
+.brand-txt { min-width: 0; }
+.brand-txt h1 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: .2px; }
+.brand-txt p {
+  margin: 1px 0 0; font-size: 11.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* --------------------------------------------------------------- main ---- */
-main { max-width: 960px; margin: 0 auto; padding: var(--s6) var(--s6) 64px; }
-.panel { display: none; animation: fade .25s ease; }
-.panel.active { display: block; }
-@keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+main {
+  flex: 1 1 auto;
+  width: 100%; max-width: var(--app-w);
+  margin: 0 auto;
+  padding: var(--s4) var(--s4)
+           calc(var(--tabbar-h) + var(--s6) + env(safe-area-inset-bottom, 0px));
+}
+.panel { display: none; }
+.panel.active { display: block; animation: panelIn .26s cubic-bezier(.22,.61,.36,1); }
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
 
+/* -------------------------------------------------------------- card ----- */
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  padding: var(--s6);
-  box-shadow: var(--shadow);
+  padding: var(--s5) var(--s4);
 }
-.card h2 { margin: 0 0 var(--s4); font-size: 16px; display: flex; align-items: center; gap: var(--s2); }
-.card h2 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 12px var(--primary); }
+.card h2 {
+  margin: 0 0 var(--s4); font-size: 15px; font-weight: 700; letter-spacing: .2px;
+  display: flex; align-items: center; gap: var(--s2);
+}
+.card h2 .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--primary); box-shadow: 0 0 10px var(--primary);
+}
 
-.row { display: flex; flex-wrap: wrap; gap: var(--s4); align-items: flex-end; margin: var(--s4) 0; }
-label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: var(--s2); }
+/* -------------------------------------------------------- 表单行 / 下拉 -- */
+label { font-size: 13px; color: var(--muted); }
+.fields { display: grid; gap: var(--s4); margin: var(--s4) 0; }
+.field { display: block; }
+.field-lbl {
+  display: block; margin-bottom: var(--s2);
+  font-size: 12px; font-weight: 600; letter-spacing: .3px; color: var(--muted);
+}
+.select-wrap { position: relative; }
 select {
-  min-height: 44px; padding: 0 var(--s3); min-width: 220px;
+  width: 100%; min-height: 46px;
+  padding: 0 42px 0 var(--s4);
+  appearance: none; -webkit-appearance: none;
   background: var(--surface-2); color: var(--text);
-  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
-  font-size: 14px; font-family: inherit;
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  font-size: 14.5px; font-family: inherit;
+  text-overflow: ellipsis;
 }
-select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-visible, input:focus-visible {
-  outline: none; box-shadow: var(--ring);
+.select-wrap .chev {
+  position: absolute; right: var(--s3); top: 50%; transform: translateY(-50%);
+  width: 18px; height: 18px; pointer-events: none; color: var(--muted);
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
 }
+select:focus-visible, .btn:focus-visible, .tab:focus-visible,
+.seg-btn:focus-visible, input:focus-visible { outline: none; box-shadow: var(--ring); }
 
 .mode-info { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+/* 说明页的引言是整段正文，用等宽字体读起来太"日志"，换回正文字体 */
+.mode-info.help-intro {
+  margin: 0 0 var(--s2);
+  font-family: var(--font);
+  font-size: 13px; line-height: 1.65;
+}
 
 /* ------------------------------------------------------------- buttons --- */
 .btn {
-  min-height: 44px; padding: 0 var(--s5);
+  min-height: 48px; padding: 0 var(--s5);
   background: var(--surface-2); color: var(--text);
-  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
-  font-size: 14px; font-weight: 600; cursor: pointer;
-  transition: all .15s ease; display: inline-flex; align-items: center; gap: var(--s2);
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  font-size: 14.5px; font-weight: 600; font-family: inherit; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
+  transition: transform .12s ease, background .15s ease,
+              border-color .15s ease, opacity .15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
-.btn:hover:not(:disabled) { border-color: var(--primary); transform: translateY(-1px); }
-.btn:disabled { opacity: .45; cursor: not-allowed; }
-.btn.primary { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
-.btn.primary:hover:not(:disabled) { background: var(--primary-strong); }
-.btn.danger { background: var(--danger); color: #2a0a0a; border-color: var(--danger); }
+.btn:active:not(:disabled) { transform: scale(.975); background: var(--surface-3); }
+.btn:disabled { opacity: .42; cursor: not-allowed; }
+.btn.primary {
+  background: var(--primary); color: var(--primary-ink);
+  border-color: transparent; font-weight: 700;
+}
+.btn.primary:active:not(:disabled) { background: var(--primary-strong); }
+.btn.danger { background: var(--danger); color: #2a0a0a; border-color: transparent; }
 .btn.ghost { background: transparent; }
-.btn.link { background: none; border: none; color: var(--accent); padding: 0; min-height: auto; text-decoration: underline; cursor: pointer; }
-.actions { display: flex; flex-wrap: wrap; gap: var(--s3); margin-top: var(--s4); }
+.btn.wide { width: 100%; }
+/* 注意选择器要同时覆盖 `.link` 单用的情况：<button class="link"> 并不带 .btn，
+   写成 `.btn.link` 会让它退回浏览器默认按钮外观（灰底方块）—— 那是最扎眼的
+   "这是网页"信号。 */
+.btn.link, .link {
+  background: none; border: none; color: var(--accent);
+  padding: 0; min-height: auto; display: inline;
+  font: inherit; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.actions {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--s3); margin-top: var(--s5);
+}
+.actions .btn.wide { grid-column: 1 / -1; }
 
 .status {
-  margin-top: var(--s4); font-size: 13px; color: var(--muted);
+  margin-top: var(--s4); font-size: 12.5px; color: var(--muted);
   font-family: var(--mono); min-height: 18px;
 }
 .status.err { color: var(--danger); }
 .status.ok { color: var(--ok); }
 
-/* ---------------------------------------------------------- dropzone ---- */
+/* ------------------------------------------------------------ dropzone --- */
 .dropzone {
   border: 1.5px dashed var(--border-strong);
   border-radius: var(--r-md);
-  padding: var(--s6); text-align: center; color: var(--muted);
+  padding: var(--s5) var(--s4); text-align: center; color: var(--muted);
   background: var(--surface-2);
-  transition: all .15s ease;
+  display: grid; gap: var(--s3); justify-items: center;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
 }
 .dropzone.drag { border-color: var(--primary); background: rgba(45,212,191,.08); color: var(--text); }
-.dropzone p { margin: 0 0 var(--s3); }
+.dropzone p { margin: 0; font-size: 13.5px; }
+.dz-ico { color: var(--muted); opacity: .75; }
 
-/* ----------------------------------------------------------- preview ---- */
+/* ------------------------------------------------------------- preview --- */
 .preview {
   display: block; width: 100%; max-width: 360px; margin: var(--s4) auto 0;
-  border: 1px solid var(--border); border-radius: var(--r-sm);
+  border: 1px solid var(--border); border-radius: var(--r-md);
   background: #000; image-rendering: pixelated;
   aspect-ratio: 320 / 256; object-fit: contain;
 }
@@ -162,6 +250,17 @@ select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-vis
 }
 .stage .preview { margin: 0; max-width: none; }
 
+/* 还没出画面时不要留一块纯黑矩形 —— 那读起来像"渲染坏了"。给一个带斜纹的
+   虚线空槽，明确表达"这里将出现画面"。 */
+.stage.empty .preview {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: repeating-linear-gradient(45deg,
+      rgba(148, 163, 184, .055) 0 9px, transparent 9px 18px), #05080c;
+}
+.stage.empty .send-overlay,
+.stage.empty .recv-overlay { display: none; }
+
 .fit-note {
   margin: var(--s3) 0 0; font-size: 12px; line-height: 1.6;
   color: var(--muted); font-family: var(--mono);
@@ -171,7 +270,7 @@ select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-vis
 
 .send-overlay {
   position: absolute; inset: 0; overflow: hidden;
-  border-radius: var(--r-sm); pointer-events: none;
+  border-radius: var(--r-md); pointer-events: none;
 }
 /* 未发送的部分被压暗；已发送的部分保持清晰 */
 .send-mask {
@@ -207,7 +306,7 @@ select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-vis
    画布上已经先铺了暗底），只留一条扫描线标出正在写入的那一行。 */
 .recv-overlay {
   position: absolute; inset: 0; overflow: hidden;
-  border-radius: var(--r-sm); pointer-events: none;
+  border-radius: var(--r-md); pointer-events: none;
 }
 .recv-line {
   position: absolute; left: 0; right: 0; top: 0; height: 2px; margin-top: -1px;
@@ -229,37 +328,147 @@ select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-vis
 }
 .stage.receiving .recv-line { animation: scanpulse 1.1s ease-in-out infinite; }
 
-/* --------------------------------------------------------- checkbox ----- */
-.check {
-  flex-direction: row; align-items: center; gap: var(--s2);
-  font-size: 13px; color: var(--text); cursor: pointer; user-select: none;
+/* ------------------------------------------------- 开关行（list row）----- */
+/* 用整行可点的列表行 + 右侧开关，替掉浏览器味的裸 checkbox。
+   注意：<input> 保持 52×32 的真实尺寸并压在开关轨道上（只把 opacity 置 0），
+   这样自动化的 check/uncheck 仍然点得到，不必为测试开后门。 */
+.group {
+  margin: var(--s4) 0 0; overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--r-md);
 }
-.check input { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; }
+.toggle-row {
+  position: relative;
+  display: flex; align-items: center; gap: var(--s3);
+  min-height: 58px; padding: var(--s3) var(--s4);
+  cursor: pointer;
+  transition: background .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.toggle-row + .toggle-row { border-top: 1px solid var(--border); }
+.toggle-row:active { background: var(--surface-3); }
+.toggle-txt { flex: 1 1 auto; min-width: 0; }
+.toggle-txt b { display: block; font-size: 14px; font-weight: 600; color: var(--text); }
+.toggle-txt small { display: block; margin-top: 1px; font-size: 11.5px; color: var(--muted); }
+.toggle-row input[type="checkbox"] {
+  position: absolute; right: var(--s4); top: 50%; transform: translateY(-50%);
+  width: 52px; height: 32px; margin: 0; opacity: 0; z-index: 2; cursor: pointer;
+}
+.toggle {
+  position: relative; flex: none;
+  width: 52px; height: 32px; border-radius: 999px;
+  background: var(--surface-3); border: 1px solid var(--border-strong);
+  transition: background .2s ease, border-color .2s ease;
+}
+.toggle::after {
+  content: ''; position: absolute; top: 3px; left: 3px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #8fa3b8;
+  transition: transform .2s cubic-bezier(.22,.61,.36,1), background .2s ease;
+}
+.toggle-row input:checked ~ .toggle { background: var(--primary); border-color: var(--primary); }
+.toggle-row input:checked ~ .toggle::after { transform: translateX(20px); background: var(--primary-ink); }
+.toggle-row input:focus-visible ~ .toggle { box-shadow: var(--ring); }
 
 /* ------------------------------------------------------- segmented ----- */
-.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 4px; gap: 4px; }
+.seg {
+  display: inline-flex; padding: 4px; gap: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 999px;
+}
 .seg-btn {
-  min-height: 40px; padding: 0 var(--s5); border: none; border-radius: 999px;
-  background: transparent; color: var(--muted); font-weight: 600; font-size: 14px; cursor: pointer;
-  transition: all .15s ease;
+  min-height: 40px; padding: 0 var(--s5);
+  border: none; border-radius: 999px;
+  background: transparent; color: var(--muted);
+  font-weight: 600; font-size: 14px; font-family: inherit; cursor: pointer;
+  transition: background .15s ease, color .15s ease;
 }
 .seg-btn.active { background: var(--primary); color: var(--primary-ink); }
 .src-pane { margin-top: var(--s4); }
 .hidden { display: none !important; }
 
 /* ------------------------------------------------------------ meter ----- */
-.meter { height: 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin: var(--s3) 0; }
-.meter-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--ok), var(--warn), var(--danger)); transition: width .08s linear; }
-#rx-rec-time { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.meter-row { display: flex; align-items: center; gap: var(--s3); margin: var(--s3) 0 0; }
+.meter {
+  flex: 1 1 auto; height: 8px; overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 999px;
+}
+.meter-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--ok), var(--warn), var(--danger));
+  transition: width .08s linear;
+}
+#rx-rec-time { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
 
-/* ------------------------------------------------------------ help ------ */
-.help-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: var(--s4); margin-top: var(--s4); }
-.help-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--s4); }
-.help-card h3 { margin: 0 0 var(--s2); font-size: 14px; color: var(--primary); }
-.help-card p, .help-card li { font-size: 13px; color: var(--muted); margin: 0 0 var(--s2); }
-.help-card code { background: #0b0f14; padding: 2px 6px; border-radius: 4px; color: var(--accent); font-family: var(--mono); }
-.note { margin-top: var(--s4); padding: var(--s3) var(--s4); border-left: 3px solid var(--warn); background: rgba(251,191,36,.07); border-radius: var(--r-sm); font-size: 13px; color: var(--muted); }
+/* ----------------------------------------------------------- tab bar ---- */
+/* 主导航放在底部：这是原生 App 的语汇，也是"不像网页"最直接的信号。 */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  background: rgba(13, 19, 26, .86);
+  backdrop-filter: blur(16px) saturate(140%);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.tabbar-inner {
+  max-width: var(--app-w); margin: 0 auto;
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  height: var(--tabbar-h);
+}
+.tab {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; padding: 0; min-height: 0;
+  background: none; border: 0; cursor: pointer;
+  color: var(--muted);
+  font-family: inherit; font-size: 11px; font-weight: 600;
+  transition: color .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.tab span { line-height: 1; letter-spacing: .3px; }
+.tab:active { color: var(--text); }
+.tab.active { color: var(--primary); }
+.tab.active .ico { stroke-width: 2.1; }
+.tab.active::before {
+  content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 26px; height: 2.5px; border-radius: 0 0 3px 3px;
+  background: var(--primary); box-shadow: 0 0 10px var(--primary);
+}
+
+/* ------------------------------------------------------------- help ----- */
+/* 原生设置页的语汇是"分组列表"（一个容器 + 行间分隔线），而不是一堆各自带背景
+   与圆角的漂浮卡片 —— 后者一眼就能看出是网页。所以这里把 .help-grid 做成容器，
+   .help-card 退化成里面的行。 */
+.help-grid {
+  display: block;
+  margin-top: var(--s4);
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.help-card { padding: var(--s4); }
+.help-card + .help-card { border-top: 1px solid var(--border); }
+.help-card h3 {
+  margin: 0 0 var(--s2); font-size: 13.5px; font-weight: 700; color: var(--text);
+}
+.help-card p, .help-card li {
+  font-size: 12.5px; line-height: 1.65; color: var(--muted); margin: 0 0 var(--s2);
+  overflow-wrap: anywhere;
+}
+.help-card b { color: var(--text); }
+.help-card code {
+  background: #0b0f14; padding: 2px 6px; border-radius: 4px;
+  color: var(--accent); font-family: var(--mono);
+}
+.help-card p:last-child { margin-bottom: 0; }
+.note {
+  margin-top: var(--s4); padding: var(--s3) var(--s4);
+  border-left: 3px solid var(--warn); background: rgba(251,191,36,.07);
+  border-radius: var(--r-sm); font-size: 13px; color: var(--muted);
+}
 .note b { color: var(--warn); }
+.about { margin: var(--s5) 0 0; text-align: center; font-size: 11.5px; color: var(--muted); }
 
 /* ---------------------------------------------------------- overlay ----- */
 .overlay {
@@ -274,11 +483,6 @@ select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-vis
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
-  .spinner { animation: spin 1.6s linear infinite; }
-}
 
 /* --------------------------------------------------- mic diagnostics box -- */
 .diag {
@@ -302,20 +506,19 @@ select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-vis
   border-radius: 5px; padding: 1px 5px; color: var(--accent);
 }
 
-footer { text-align: center; color: var(--muted); font-size: 12px; padding: var(--s4); }
-
+/* ------------------------------------------------------------- toast ---- */
 /* 浮动提示：导出结果这类"一句话反馈"。
    之所以不用 alert()：它会打断录音/播放，而且安卓壳 App 里原生 Toast 会被系统折叠，
-   页面内再给一条才看得清。 */
+   页面内再给一条才看得清。位置抬到底部导航栏之上，避免互相遮挡。 */
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 28px;
+  bottom: calc(var(--tabbar-h) + 14px + env(safe-area-inset-bottom, 0px));
   transform: translate(-50%, 12px);
   max-width: min(92vw, 520px);
-  padding: 10px 16px;
+  padding: 11px 16px;
   border-radius: var(--r-md);
-  background: var(--surface-2);
+  background: var(--surface-3);
   border: 1px solid var(--border-strong);
   color: var(--text);
   font-size: 13px;
@@ -329,7 +532,6 @@ footer { text-align: center; color: var(--muted); font-size: 12px; padding: var(
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.ok { border-color: var(--ok); color: var(--ok); }
 .toast.err { border-color: var(--danger); color: var(--danger); }
-@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
 
 /* ===========================================================================
    浏览器版 / 安卓壳 App 版：同一份 HTML，两套文案
@@ -361,11 +563,19 @@ footer { text-align: center; color: var(--muted); font-size: 12px; padding: var(
 .app-shell input,
 .app-shell textarea { -webkit-user-select: text; user-select: text; }
 
-/* 刘海屏 / 手势条：顶栏与浮动提示让开安全区 */
-.app-shell .topbar { padding-top: max(var(--s4), env(safe-area-inset-top)); }
-.app-shell footer { padding-bottom: max(var(--s4), env(safe-area-inset-bottom)); }
-.app-shell .toast { bottom: calc(28px + env(safe-area-inset-bottom, 0px)); }
-
 /* 壳 App 里"录音完成"的进度条走满后不该继续跳，交给 .complete 收势 */
 .recv-chip.complete { color: var(--ok); border-color: var(--ok); }
 .app-shell .recv-overlay .recv-line { will-change: top; }
+
+/* ------------------------------------------------------ 动效偏好 / 宽屏 -- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+  .spinner { animation: spin 1.6s linear infinite; }
+}
+
+/* 桌面浏览器：把版心收成手机宽度，并给底部导航补一条投影，
+   让它读起来像"一个手机应用"，而不是"一个被拉宽的网页"。 */
+@media (min-width: 720px) {
+  .card { padding: var(--s6) var(--s5); }
+  .tabbar { box-shadow: 0 -10px 30px rgba(0,0,0,.32); }
+}
