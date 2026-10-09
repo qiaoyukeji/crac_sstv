@@ -162,13 +162,33 @@ log "Gradle 任务：$GRADLE_TASK"
 # DSP 数学。移植版曾经"能编译但结果是错的"（encode 用了图像尺寸而非制式尺寸、
 # readPx 忘了把频率换算成灰度值），回环 PSNR 只有 4.9 dB 却没人发现 —— 因为没人跑它。
 # 这组测试拿 Python 神谕的基线卡着，就是防这种事再发生。
-# CI 工作目录是纯 ASCII，不会有 Windows 那个 @argfile 编码问题（见 android/README.md）。
 ENGINE_TESTS="${ENGINE_TESTS:-:sstv-engine:test}"
 if [ -n "$ENGINE_TESTS" ]; then
   log "同时运行：$ENGINE_TESTS（置 ENGINE_TESTS= 可关闭）"
 fi
-# shellcheck disable=SC2086  # 故意让两个变量按空格拆成多个任务
-./gradlew $GRADLE_TASK $ENGINE_TESTS --no-daemon --stacktrace
+
+# ------------------------------------------- 3a. Windows 非 ASCII 路径兼容 --
+# Gradle 把测试 worker 的类路径写进一个 @argfile，而 java.exe 是在**虚拟机启动之前**
+# 展开它的，用的是系统 ANSI 代码页；daemon 却是按 -Dfile.encoding=UTF-8 写的。
+# 路径里只要有一个非 ASCII 字符（中文目录名），类路径就整体乱码，测试类加载不到，
+# 报 `initializationError / ClassNotFoundException` —— 看起来像"测试写错了"，其实是编码。
+# CI 的工作目录是纯 ASCII，永远不会走到这里；只在 Windows + 非 ASCII 路径下把
+# daemon 的编码拉回系统代码页（中文 Windows 是 GBK）。详见 android/README.md。
+GRADLE_EXTRA=()
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if [ -n "$repo_root" ] && printf '%s' "$repo_root" | LC_ALL=C grep -q '[^ -~]'; then
+      log "Windows + 非 ASCII 路径：启用 file.encoding=GBK 兼容（绕开 Gradle @argfile 编码缺陷）"
+      # 必须整体作为一个 argv 元素（里面含空格），所以用数组而不是字符串 ——
+      # 字符串会被 shell 按空格拆开，把 -XX:... / -Dfile.encoding=... 当成 Gradle
+      # 的 CLI 选项，直接报 "Unknown command-line option"。
+      GRADLE_EXTRA=("-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m -Dfile.encoding=GBK")
+    fi
+    ;;
+esac
+
+# shellcheck disable=SC2086  # 故意让 GRADLE_TASK / ENGINE_TESTS 按空格拆成多个任务
+./gradlew $GRADLE_TASK $ENGINE_TESTS "${GRADLE_EXTRA[@]}" --no-daemon --stacktrace
 
 # ------------------------------------------------------------------ 4. 产物 --
 log "APK 产物"

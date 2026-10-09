@@ -125,10 +125,11 @@ M1  round-trip PSNR = 35.726719 dB (oracle 35.73)
 PD90 round-trip PSNR = 26.843932 dB (oracle 26.76)
 ```
 
-> **路径含中文时必须加一个参数**（Windows 上尤其常见）
+> **路径含中文时**（Windows 上尤其常见）
 >
-> 如果工作区路径里有非 ASCII 字符（比如本仓库的 `苹果app_业余无线电SSTV项目`），
-> 上面这条命令会失败在：
+> `ci-build-apk.sh` **会自动处理**：检测到「Windows + 非 ASCII 路径」就自动补上
+> `-Dorg.gradle.jvmargs=... -Dfile.encoding=GBK`，你什么都不用做。
+> 但如果你是**直接调 Gradle**，就会撞上这个坑：
 >
 > ```
 > SSTVEngineTest > initializationError FAILED
@@ -141,16 +142,16 @@ PD90 round-trip PSNR = 26.843932 dB (oracle 26.76)
 > 展开 `@argfile` 的，用的是系统 ANSI 代码页（中文 Windows 上是 GBK）。两者不一致，
 > 类路径里的中文目录名全部变成乱码，测试类自然加载不到。
 >
-> CI 上不存在这个问题（Gitee Go 的工作目录是纯 ASCII）。本机想跑的话，把 daemon 的
-> 编码拉回系统代码页即可：
+> CI 上不存在这个问题（Gitee Go 的工作目录是纯 ASCII）。本机直接调 Gradle 时，
+> 把 daemon 的编码拉回系统代码页即可：
 >
 > ```bash
 > cd android && ./gradlew :sstv-engine:test \
 >   -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m -Dfile.encoding=GBK"
 > ```
 >
-> 或者干脆把仓库放到纯英文路径下（`E:\code\crac_sstv`）。**不要把 `-Dfile.encoding=GBK`
-> 写进 `android/gradle.properties`** —— 那样会把 CI 也一起带偏。
+> 或者干脆把仓库放到纯英文路径下（`E:\code\crac_sstv`）。**不要把这个参数写进
+> `android/gradle.properties`** —— 那样会把 CI 也一起带偏。
 
 ## 签名
 
@@ -191,4 +192,5 @@ cp android/keystore.properties.example android/keystore.properties
    （`createStreamDecoder`，支撑麦克风"边收边成像"）在 `sstv-engine/` 中还没有对应实现。
    当前 App 走 WebView，用的是 JS 那份，所以没有功能缺口；将来真要切原生 Compose，
    这块是必须补的第一件事。
-6. **本地路径不能含中文**（否则单测跑不起来，APK 构建不受影响）—— 详见"本地构建"一节。
+6. **本地路径含中文时不要直接调 Gradle**：`ci-build-apk.sh` 会自动兼容，手工调
+   `./gradlew` 则会撞上 Gradle 在 Windows 上的 `@argfile` 编码缺陷 —— 详见"本地构建"一节。
