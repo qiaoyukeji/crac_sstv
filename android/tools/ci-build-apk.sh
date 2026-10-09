@@ -192,11 +192,30 @@ esac
 
 # ------------------------------------------------------------------ 4. 产物 --
 log "APK 产物"
-found="$(find "$android_root/app/build/outputs/apk" -type f -name '*.apk' 2>/dev/null || true)"
+out_dir="$android_root/app/build/outputs/apk"
+found="$(find "$out_dir" -type f -name '*.apk' 2>/dev/null || true)"
 if [ -z "$found" ]; then
   die "构建结束但没找到任何 APK，请检查上面的日志"
 fi
+
+# 把版本号读出来：制品区里堆着好几个 app-release.apk 时，光看文件名分不出哪版是哪版。
+# 只读 defaultConfig 块里那一行（第一个匹配即 versionName），不解析整个 Gradle 文件。
+version_name="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+  "$android_root/app/build.gradle.kts" | head -n 1)"
+[ -n "$version_name" ] || version_name="unknown"
+log "版本：$version_name"
+
+# 改名成 sstv-<版本>-<构建类型>.apk。这里是纯 shell 收尾，任何一步失败都不该
+# 让"已经成功的构建"变成失败 —— 所以处处 `|| true`，改名没成只是文件名叫旧的。
 while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  base="$(basename "$f")"
+  kind="${base#app-}"; kind="${kind%.apk}"          # app-release.apk -> release
+  dst="$(dirname "$f")/sstv-${version_name}-${kind}.apk"
+  if [ "$f" != "$dst" ]; then
+    mv -f "$f" "$dst" 2>/dev/null || true
+    [ -f "$dst" ] && f="$dst"
+  fi
   printf '  %s  (%s bytes)\n' "$f" "$(stat -c%s "$f" 2>/dev/null || echo '?')"
 done <<< "$found"
 

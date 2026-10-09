@@ -32,8 +32,10 @@ android {
         applicationId = "com.qiaoyukeji.sstv"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        // versionCode 必须严格递增 —— 安卓只认它来判定"能否覆盖安装"。
+        // versionName 是给人看的：1.0.0 → 1.1.0（界面重做 + 去网页化 + 收满自动停止）。
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     signingConfigs {
