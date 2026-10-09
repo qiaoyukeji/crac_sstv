@@ -43,15 +43,19 @@ function makeSandbox(opts) {
   return sandbox;
 }
 
-// 把代码块包进一个 IIFE 里，暴露需要断言的函数
-const wrapper = `(function(){ ${block}
+// 把代码块包进一个 IIFE 里，暴露需要断言的函数。
+// IS_APP 是 app.js 里由 index.html <head> 打上的运行模式标记（壳 App / 浏览器），
+// 它决定诊断文案走哪一套，所以这里也照着注入 —— 生产代码不改，只换运行环境。
+const wrapper = (isApp) => `(function(){
+  var IS_APP = ${isApp ? 'true' : 'false'};
+  ${block}
   return { probeMic: probeMic, describeGumError: describeGumError, esc: esc };
 })()`;
 
 function load(opts) {
   const sandbox = makeSandbox(opts);
   const ctx = vm.createContext(sandbox);
-  return { api: vm.runInContext(wrapper, ctx), sandbox };
+  return { api: vm.runInContext(wrapper(opts.isApp === true), ctx), sandbox };
 }
 
 const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36';
@@ -152,6 +156,40 @@ console.log('\n=== 7. esc() 转义（诊断文案注入 DOM，必须防 XSS）==
   check('<script> 被转义', api.esc('<script>alert(1)</script>') === '&lt;script&gt;alert(1)&lt;/script&gt;');
   check('引号被转义', api.esc('a"b\'c') === 'a&quot;b&#39;c');
   check('& 被转义', api.esc('a&b') === 'a&amp;b');
+}
+
+console.log('\n=== 8. 壳 App 模式：诊断文案不能出现网页措辞 ===');
+{
+  // 壳 App 里 origin 是 https://appassets.androidplatform.net，永远是安全上下文，
+  // 正常路径 probeMic() 返回 null；这里专门验"万一走到异常分支"和"权限被拒"两条文案。
+  const { api } = load({
+    secureContext: true, protocol: 'https:', hostname: 'appassets.androidplatform.net',
+    origin: 'https://appassets.androidplatform.net', ua: ANDROID_UA,
+    mediaDevices: true, isApp: true
+  });
+  check('安全上下文下 probeMic() 放行', api.probeMic() === null);
+
+  const denied = api.describeGumError(Object.assign(new Error('nope'), { name: 'NotAllowedError' }));
+  const blob = denied.msg + ' ' + denied.detail + ' ' + denied.fixes.join(' ');
+  check('权限被拒时指向「设置 → 应用 → … → 权限」',
+    /设置\s*→\s*应用/.test(blob) && /权限/.test(blob), denied.fixes[0]);
+  check('不再出现浏览器措辞（地址栏 / 刷新页面 / 站点权限）',
+    !/地址栏|刷新页面|站点权限|站点信息/.test(blob), blob.slice(0, 60));
+  check('仍然给出可执行的下一步（至少 2 条）', denied.fixes.length >= 2,
+    denied.fixes.length + ' 条');
+}
+
+console.log('\n=== 9. 壳 App 模式：异常安全上下文也不提"装根证书" ===');
+{
+  const { api } = load({
+    secureContext: false, protocol: 'http:', hostname: '192.168.3.185',
+    origin: 'http://192.168.3.185:8000', ua: ANDROID_UA, mediaDevices: false, isApp: true
+  });
+  const d = api.probeMic();
+  check('仍判定为 insecure（不掩盖问题）', d && d.kind === 'insecure', JSON.stringify(d && d.kind));
+  const blob = d.msg + ' ' + d.detail + ' ' + d.fixes.join(' ');
+  check('不出现"安装根证书 / HTTPS_MIC_GUIDE / 浏览器"等网页版步骤',
+    !/根证书|HTTPS_MIC_GUIDE|浏览器|insecure-origin/.test(blob), blob.slice(0, 80));
 }
 
 console.log('\n---------------------------------------------');

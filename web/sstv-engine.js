@@ -398,7 +398,14 @@
     }
     return runs;
   }
-  function visEnd(freq, sr) {
+  /**
+   * 找一帧的起点（采样点）。返回 [起点, 是否真的找到了 VIS 引导音]。
+   *
+   * 第二个值不是可有可无的附注：找不到引导音时只能用 0.95 s 的兜底估计，而这个
+   * 估计在"录音开始得比发射早很多"的场景下会**大幅偏早**。UI 要判断"整帧信号是否
+   * 已经收完"，就必须知道这个起点可不可信 —— 否则会提前收手，切掉大半幅画面。
+   */
+  function visEndInfo(freq, sr) {
     var near = new Uint8Array(freq.length);
     for (var i = 0; i < freq.length; i++) near[i] = (Math.abs(freq[i] - 1900) < 150) ? 1 : 0;
     var runs = findRuns(near, Math.floor(0.25 * sr));
@@ -406,10 +413,11 @@
       var leaderEnd = runs[0][1];
       var startBitPos = leaderEnd + Math.floor((0.010 + 0.300) * sr);
       var cell = Math.floor(0.030 * sr);
-      return startBitPos + 10 * cell;
+      return [startBitPos + 10 * cell, true];
     }
-    return Math.floor(0.95 * sr);
+    return [Math.floor(0.95 * sr), false];
   }
+  function visEnd(freq, sr) { return visEndInfo(freq, sr)[0]; }
   function findSync(freq, lo, hi, sr, syncDur) {
     lo = Math.max(0, lo); hi = Math.min(freq.length, hi);
     // lo > hi 是完全可能的：录音在"一帧还没走完"时结束，上一行 sync 之后
@@ -609,12 +617,20 @@
     var W = 0, H = 0, step = 0, nLines = 0, lineIdx = 0, rows = 0;
     var pos = 0, misses = 0, locked = false, lastSync = 0;
     var rgbF = null, ycbcrB = null, outRgb = null;
+    // 帧起点（采样点，相对"送进来的第一块音频"）。它来自真正解出的 VIS 头位置，
+    // 而不是"录音开始时刻" —— 用户完全可能先按录音、对方几秒后才发射。有了它，
+    // stats() 才能给出"这一帧到哪个采样点结束"，UI 就能在信号播完时准确收手。
+    var frameStart = 0;
+    /** frameStart 是否来自真正找到的 VIS 引导音（false = 0.95 s 的兜底估计） */
+    var frameStartTrusted = false;
 
     function beginTrack() {
       W = mode.width; H = mode.height;
       step = mode.lineDuration(0) * sr;
       nLines = (mode.kind === 'pd') ? (mode.height >> 1) : mode.height;
-      pos = visEnd(freq.subarray(0, freqLen), sr);
+      var ve = visEndInfo(freq.subarray(0, freqLen), sr);
+      pos = ve[0]; frameStartTrusted = ve[1];
+      frameStart = pos;
       outRgb = new Uint8Array(H * W * 3);
       if (mode.kind === 'rgb') { rgbF = new Float64Array(H * W * 3); ycbcrB = null; }
       else { rgbF = null; ycbcrB = new Float64Array(H * W * 3); }
@@ -794,6 +810,14 @@
           rows: rows, totalRows: H,
           lines: lineIdx, totalLines: nLines,
           locked: locked, misses: misses,
+          // 帧时间轴（采样点，相对送进来的第一块音频）。UI 靠它判断"这一帧的信号
+          // 是否已经全部到达" —— 只看 rows 是不够的：实时路径要等行尾之后约
+          // 1.5 个行周期的数据才肯解最后一行，而发射方在最后一行之后就没有信号了，
+          // 于是 rows 会永远停在 H-2 左右。帧长由制式唯一决定，是更硬的判据。
+          frameStart: frameStart,
+          frameEnd: (mode && frameStart > 0) ? frameStart + mode.frameDuration * sr : 0,
+          frameStartTrusted: frameStartTrusted,
+          stepS: mode ? step / sr : 0,
           seconds: bufLen / sr, sr: sr
         };
       },

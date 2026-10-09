@@ -44,9 +44,15 @@
   }
 
   // ------------------------------------------------------ 原生桥 / 浮动提示 --
-  // 安卓壳 App 里没有"下载"这回事：WebView 不会为 <a download> + blob: 落地文件，
+  // 浏览器版与安卓壳 App 版跑的是同一份前端。唯一判据是 window.SSTVNative 在不在 ——
+  // 那是 MainActivity 用 addJavascriptInterface 注入的桥对象，只有壳 App 里有。
+  // index.html 的 <head> 已经据此打好了 html.app-shell / html.web-shell（同步执行，
+  // 避免闪一下网页版文案），这里只是把结论接过来用。
+  var IS_APP = window.__SSTV_IS_APP === true;
+
+  // 安卓 WebView 里没有"下载"这回事：WebView 不会为 <a download> + blob: 落地文件，
   // 也不会触发 DownloadListener（那个只认 http/https）。所以走 JS 桥，把内容转成
-  // base64 交给原生写进"下载/SSTV"。浏览器里 SSTVNative 不存在，这段自动跳过。
+  // base64 交给原生写进相册 / 下载目录。
   var nativeBridge = (window.SSTVNative && typeof window.SSTVNative.saveFile === 'function')
     ? window.SSTVNative
     : null;
@@ -61,30 +67,58 @@
     toastTimer = setTimeout(function () { el.className = 'toast'; }, 3600);
   }
 
-  // 原生写完文件后回调这里（Toast 会被系统折叠，页面里再给一条才看得清）
+  /** 正在等待原生回报结果的导出（同一时刻只会有一笔，串行操作） */
+  var pendingExport = null;   // { name, el }
+
+  // 原生写完文件后回调这里。两条反馈各司其职：系统 Toast 会被折叠、也可能被
+  // 用户忽略；页面内再给一条、并把状态行改成最终结论，用户才知道"到底存哪了"。
   window.__sstvOnSaved = function (name, ok, message) {
-    toast(message || (ok ? '已保存 ' + name : '导出失败'), ok ? 'ok' : 'err');
+    var text = message || (ok ? '已保存 ' + name : '导出失败');
+    if (pendingExport && (!name || pendingExport.name === name)) {
+      setStatus(pendingExport.el, text, ok ? 'ok' : 'err');
+      pendingExport = null;
+    }
+    toast(text, ok ? 'ok' : 'err');
   };
 
-  function download(blob, filename) {
+  /**
+   * 导出。浏览器走 <a download>；壳 App 走原生桥。
+   *
+   * 返回 Promise 而不是 void：原生桥是异步的（写文件 → Toast → 回调），调用方
+   * 必须等真实结果再决定提示什么。此前是"先报成功、再去保存"，一旦原生存盘
+   * 失败，用户看到的是"已导出"却找不到文件 —— 比直接报错更难查。
+   *
+   * resolve 值：
+   *   { ok: true, pending: true }  已交给原生，最终结果由 __sstvOnSaved 回报
+   *   { ok: true }                 浏览器路径已触发下载
+   *   { ok: false, message }       当场失败（读不出数据 / 桥抛异常）
+   */
+  function download(blob, filename, statusEl) {
     if (nativeBridge) {
-      var fr = new FileReader();
-      fr.onload = function () {
-        var s = String(fr.result || '');
-        var comma = s.indexOf(',');
-        try {
-          nativeBridge.saveFile(
-            filename,
-            blob.type || 'application/octet-stream',
-            comma >= 0 ? s.slice(comma + 1) : s
-          );
-        } catch (e) {
-          toast('导出失败：' + (e && e.message ? e.message : e), 'err');
-        }
-      };
-      fr.onerror = function () { toast('导出失败：无法读取数据', 'err'); };
-      fr.readAsDataURL(blob);
-      return;
+      pendingExport = { name: filename, el: statusEl || $('#tx-status') };
+      return new Promise(function (resolve) {
+        var fr = new FileReader();
+        fr.onload = function () {
+          var s = String(fr.result || '');
+          var comma = s.indexOf(',');
+          try {
+            nativeBridge.saveFile(
+              filename,
+              blob.type || 'application/octet-stream',
+              comma >= 0 ? s.slice(comma + 1) : s
+            );
+            resolve({ ok: true, pending: true });
+          } catch (e) {
+            pendingExport = null;
+            resolve({ ok: false, message: String((e && e.message) || e) });
+          }
+        };
+        fr.onerror = function () {
+          pendingExport = null;
+          resolve({ ok: false, message: '无法读取待导出的数据' });
+        };
+        fr.readAsDataURL(blob);
+      });
     }
 
     var url = URL.createObjectURL(blob);
@@ -95,6 +129,26 @@
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 8000);
+    return Promise.resolve({ ok: true });
+  }
+
+  /**
+   * 导出 + 状态反馈的统一出口（TX 的 WAV 与 RX 的 PNG 共用）。
+   * 三种结局分别落到状态行上，不再出现"嘴上说成功、文件没落地"。
+   */
+  function exportBlob(blob, filename, statusElId) {
+    var el = $(statusElId);
+    setStatus(el, '正在导出 ' + filename + ' …');
+    return download(blob, filename, el).then(function (r) {
+      if (!r.ok) {
+        setStatus(el, '导出失败：' + (r.message || '未知原因'), 'err');
+        toast('导出失败：' + (r.message || '未知原因'), 'err');
+      } else if (!r.pending) {
+        setStatus(el, '已导出 ' + filename, 'ok');           // 浏览器路径
+      }
+      // pending：状态由原生回调 __sstvOnSaved 收尾，这里不抢着报"成功"
+      return r;
+    });
   }
 
   function kindLabel(mode) {
@@ -509,8 +563,7 @@
     try {
       var wav = SSTV.encodeWAV(txAudio, SR);
       var name = 'sstv_' + txMode.id.replace(/\s+/g, '') + '_' + SR + '.wav';
-      download(new Blob([wav], { type: 'audio/wav' }), name);
-      setStatus($('#tx-status'), '已导出 ' + name, 'ok');
+      exportBlob(new Blob([wav], { type: 'audio/wav' }), name, '#tx-status');
     } catch (err) {
       setStatus($('#tx-status'), '导出失败：' + err.message, 'err');
     }
@@ -621,6 +674,19 @@
     var secure = window.isSecureContext === true || proto === 'https:' || isLoopbackHost(host);
 
     if (!secure) {
+      // 壳 App 走的是 WebViewAssetLoader 挂在 https://appassets.androidplatform.net
+      // 下的资源，永远是安全上下文，理论上到不了这里。但真到了也绝不能把
+      // 「装根证书 / 换 https 访问」这类网页版步骤甩给 App 用户。
+      if (IS_APP) {
+        return {
+          kind: 'insecure',
+          msg: '页面未处于安全上下文，系统已隐藏麦克风接口',
+          detail: '这是异常状态：本应用应始终以 https 加载自己的本地资源。' +
+                  '普通使用不会遇到，若你在调试，请检查 WebViewAssetLoader 是否生效。',
+          fixes: ['重启应用后重试',
+                  '暂时可用「文件」标签页导入对讲机录音来解码']
+        };
+      }
       var fixes = [], plat = platformKind();
       if (plat === 'android') {
         fixes.push('免装证书：在手机 Chrome 中把 ' + origin +
@@ -683,6 +749,27 @@
         '系统或硬件在启动过程中中止了请求。',
         ['稍后重试；必要时重启浏览器']]
     };
+
+    // 壳 App 与浏览器的"下一步"完全不同：浏览器要去改站点权限、刷新页面；App 要
+    // 去系统设置里给应用开权限、重启应用。同一句建议放错地方就是误导用户。
+    if (IS_APP) {
+      table.NotAllowedError = ['麦克风权限被拒绝',
+        '本应用需要麦克风权限才能接收电台音频。若此前误点了「拒绝」，' +
+        '请在系统设置里重新允许，然后回到应用重试。',
+        ['打开「设置 → 应用 → SSTV Studio → 权限」，把「麦克风」改为「允许」',
+         '回到应用后重新点「开始录音」',
+         '确认系统级的隐私/权限开关没有禁止本应用访问麦克风']];
+      table.NotReadableError = ['麦克风被其它程序占用',
+        '设备存在但无法打开，通常已被其它应用（通话、录音机、语音会议）独占。',
+        ['关闭其它正在录音或通话的应用后重试',
+         '若正在进行通话 / 语音会议，请先挂断',
+         '仍失败可重启应用再试']];
+      table.SecurityError = ['安全策略阻止了麦克风访问',
+        '系统拒绝把麦克风交给本应用。',
+        ['重启应用后重试',
+         '确认系统没有对本应用启用「权限单次授权 / 隐私保护」之类的限制']];
+    }
+
     // 历史别名
     table.PermissionDeniedError = table.NotAllowedError;
     table.DevicesNotFoundError = table.NotFoundError;
@@ -718,7 +805,30 @@
   var liveW = 0, liveH = 0;
   var liveT0 = 0;
 
+  // ---- 收满自动停止（Auto stop on complete） -------------------------------
+  // 为什么需要：一次 SSTV 传输的长度是确定的（Robot 36 恰好 36 s，Martin M1 115 s）。
+  // 整幅收完之后继续录，只会把静音灌进缓冲区 —— 既拉长后面那次批量重解的耗时，
+  // 又逼用户盯着屏幕手点"停止"，稍微走神就多录几十秒噪声。
+  //
+  // 判据不靠计时器猜，而是解码器自己给的事实：stats() 里 rows 是"已确定的行数"、
+  // totalRows 是制式高度，收满即整幅到手。这个信号比"按已知时长定时"稳得多 ——
+  // 后者一旦遇到信号中断就会在不完整的时候停下。
+  //
+  // 为什么不在音频回调里直接停：onaudioprocess 跑在音频线程上，在里面拆节点、
+  // 关 AudioContext 很容易把自己正在执行的那次回调搞坏。这里只置标志，由已有的
+  // 250 ms 计时器在主线程上执行停止 —— 代价是几十毫秒延迟，换来的是确定性。
+  var liveStats = null;      // 最近一次 stats() 快照
+  var liveCompleteAt = 0;    // 首次发现"收满"的墙钟时间；0 = 尚未收满
+  var liveCompleteReason = null;  // 'rowCount' | 'frameEnd' | 'lostSync'
+  var livePaintOn = true;    // 是否把解出的行画到画布上（对应「实时逐行成像」开关）
+  var LIVE_SETTLE_MS = 350;  // 收满后再等一小会儿，让最后一行画完再停
+
   function liveCapable() { return typeof SSTV.createStreamDecoder === 'function'; }
+
+  function autoStopEnabled() {
+    var cb = $('#rx-auto-stop');
+    return !cb || cb.checked;
+  }
 
   /** 新一幅画面开始时铺"待机底"：暗底 + 细横线。 */
   function liveInitCanvas(w, h) {
@@ -768,6 +878,14 @@
         (st.seconds || 0).toFixed(1) + ' s，正在等待制式识别';
       return;
     }
+    if (liveCompleteReason) {                       // 收满之后不再来回跳数字
+      chip.textContent = '✓ 接收完成  ·  ' + st.rows + ' / ' + st.totalRows + ' 行';
+      chip.classList.add('complete');
+      $('#rx-live-line').style.top = '100%';
+      note.textContent = '整幅已收满（' + st.mode + ' ' + st.width + '×' + st.height +
+        '）· ' + liveReasonText(liveCompleteReason, st) + ' · 正在收尾…';
+      return;
+    }
     var pct = st.totalRows ? Math.round(st.rows / st.totalRows * 100) : 0;
     chip.textContent = '● 接收中 ' + pct + '%  ·  ' + st.rows + ' / ' + st.totalRows + ' 行';
     $('#rx-live-line').style.top =
@@ -778,25 +896,100 @@
       ' · ' + st.sr + ' Hz · 已接收 ' + fmtClock(t);
   }
 
+  /**
+   * 判断整幅是否已经收满；收满则返回**原因**（供 UI 显示），否则返回 null。
+   *
+   * 只看"行数收满"是不够的，这是这里最容易踩的坑：实时路径每解一行都要求该行
+   * 起始位置之后还有约 1.5 个行周期的数据（否则解出来的尾巴是空的），而发射方
+   * 在最后一行之后就静音了 —— 于是 rows 会稳稳停在 H-2 左右，永远等不到 H。
+   *
+   * 三条判据互为兜底，覆盖不同接收场景：
+   *
+   *   rowCount 已确认行数收满 —— 最确定。信号结束前若还有一小段尾音（真实电台常见），
+   *            这条会先成立。
+   *   frameEnd 音频已覆盖整帧时长 —— 主力判据。帧起点来自**真正解出的 VIS 导引音
+   *            位置**，不是"录音开始时刻"（用户完全可能先按录音、对方几秒后才发射）。
+   *            关键好处：它只取决于"收到了多长的音频"，与解调成功与否无关 —— 就算
+   *            信号中途有衰落漏掉若干行，时间一到照样能干净收手。
+   *   lostSync 曾锁定过、之后长时间找不到同步脉冲 —— 用于"接收方在发射中途才开始
+   *            录音"：此时帧起点只能是兜底估计、frameEnd 会把帧尾算晚，
+   *            "再也找不到同步"才是信号结束的直接证据。
+   */
+  var LIVE_TAIL_S = 0.5;    // 整帧之后再多收一点，确保最后一行数据完整
+
+  /** 连续丢失行同步多久算"发射已结束"。取帧长的 25%，并夹在 8–15 s：
+   *  这是**兜底**判据，宁可多等几秒都不要提前收手 —— 提前收手的代价是画面被切掉，
+   *  而多等的代价只是用户多等一会儿（随时可以手动停止）。
+   *  实测教训：曾用 3 s 阈值，结果一次 3 s 的衰落就被当成"发射结束"，
+   *  后半幅整段没解出来。 */
+  function liveLostSeconds(st) {
+    var byFrame = (st.frameEnd - st.frameStart) / st.sr * 0.25;
+    if (!(byFrame > 0)) return 10.0;
+    return Math.max(8.0, Math.min(15.0, byFrame));
+  }
+
+  function liveCompletionReason(st) {
+    if (!st || !st.width) return null;
+    if (st.totalRows > 0 && st.rows >= st.totalRows) return 'rowCount';
+    if (st.frameEnd > 0 && st.seconds >= st.frameEnd / st.sr + LIVE_TAIL_S) {
+      // 帧起点是真正找到 VIS 导引音算出来的 → 帧尾可信，音频盖到就收手。
+      if (st.frameStartTrusted) return 'frameEnd';
+      // 没有导引音（手动指定制式且信号缺头）→ 帧起点只是 0.95 s 的兜底估计，
+      // 可能明显偏早。这时再要一道"行数接近收满"的门槛，免得切掉大半幅。
+      if (st.rows >= st.totalRows * 0.9) return 'frameEnd';
+    }
+    if (st.locked && st.rows > 0 && st.stepS > 0 &&
+        st.misses * st.stepS * 0.5 >= liveLostSeconds(st)) return 'lostSync';
+    return null;
+  }
+
+  /** 停止原因 → 一句人话（写进接收遮罩下方的说明行，用户看得到"为什么停了"）。 */
+  function liveReasonText(reason, st) {
+    if (reason === 'lostSync') {
+      return '信号已中断 ' + liveLostSeconds(st).toFixed(0) +
+             ' s 以上，按发射结束处理（画面为此前收到的部分）';
+    }
+    if (reason === 'rowCount') return '整幅行数已全部收满';
+    return '整帧信号已收完（' + (st.frameEnd / st.sr).toFixed(1) + ' s）';
+  }
+
   function liveFlush() {
     if (!liveDec) return;
     var st = liveDec.stats();
-    if (st.width && (!liveImg || liveW !== st.width || liveH !== st.height)) {
-      liveInitCanvas(st.width, st.height);
+    liveStats = st;
+    if (livePaintOn) {
+      if (st.width && (!liveImg || liveW !== st.width || liveH !== st.height)) {
+        liveInitCanvas(st.width, st.height);
+      }
+      if (liveImg && st.rows > liveRows) { livePaintRows(liveRows, st.rows); liveRows = st.rows; }
     }
-    if (liveImg && st.rows > liveRows) { livePaintRows(liveRows, st.rows); liveRows = st.rows; }
     liveShowProgress(st);
+    // 收满的那一刻只做一件事：记下时间与原因。真正的停止交给主线程的计时器
+    // （见 liveCompleteAt 处的注释）。
+    if (!liveCompleteAt) {
+      var reason = liveCompletionReason(st);
+      if (reason) {
+        liveCompleteAt = Date.now();
+        liveCompleteReason = reason;
+        toast(autoStopEnabled()
+          ? '整幅已接收完成，正在自动停止录音…'
+          : '整幅已接收完成（「自动停止」已关闭，请手动停止）', 'ok');
+      }
+    }
   }
 
-  function liveStart(rate, hint) {
+  function liveStart(rate, hint, paint) {
     liveDec = null;
     if (!liveCapable()) return false;
     liveDec = SSTV.createStreamDecoder(rate, hint, { block: 4096 });
     liveImg = null; liveRgb = null; liveRows = 0; liveW = 0; liveH = 0;
     liveT0 = Date.now();
+    liveStats = null; liveCompleteAt = 0; liveCompleteReason = null;
+    livePaintOn = (paint !== false);
     $('#rx-png').disabled = true;
     $('#rx-stage').classList.add('receiving');
     $('#rx-live').classList.remove('hidden');
+    $('#rx-live-chip').classList.remove('complete');
     $('#rx-live-chip').textContent = '等待 VIS 头…';
     $('#rx-live-note').textContent = '实时解调 @ ' + rate + ' Hz · 正在等待信号';
     return true;
@@ -805,6 +998,18 @@
   function liveHide() {
     $('#rx-stage').classList.remove('receiving');
     $('#rx-live').classList.add('hidden');
+    $('#rx-live-chip').classList.remove('complete');
+  }
+
+  /**
+   * 由 250 ms 计时器（主线程）调用：收满并静置片刻后结束录音。
+   * 返回 true 表示本次已经触发了停止。
+   */
+  function liveMaybeAutoStop() {
+    if (!liveCompleteAt) return false;
+    if (!autoStopEnabled()) return false;
+    if (Date.now() - liveCompleteAt < LIVE_SETTLE_MS) return false;
+    return true;
   }
 
   /** 录音进行中：喂入新到的一块音频，并把新增行画出来。 */
@@ -829,6 +1034,7 @@
     var dec = liveDec;
     liveDec = null;
     liveHide();
+    liveStats = null; liveCompleteAt = 0; liveCompleteReason = null; livePaintOn = true;
     if (!dec) return null;
     try { dec.finish(); } catch (e) { /* 收尾失败就当作没有实时结果 */ }
     var st = dec.stats();
@@ -871,6 +1077,33 @@
   // 页面加载 / 切到麦克风标签时都刷新一次环境诊断（录音进行中不打扰）
   function refreshMicDiag() { if (!recProc) renderMicDiag(probeMic()); }
   refreshMicDiag();
+
+  // ---- 「实时逐行成像」与「接收完成自动停止」的联动提示 --------------------
+  // 两个开关都能独立决定要不要启动解码器（见录音启动处），但只有一个开了另一个
+  // 关着时，用户很容易以为自己关掉的那个还在生效，所以用一行小字把当前的实际
+  // 行为说清楚 —— 比事后解释"为什么没自动停"便宜得多。
+  function refreshAutoHint() {
+    var hint = $('#rx-auto-hint');
+    if (!hint) return;
+    var liveOn = $('#rx-live-on') && $('#rx-live-on').checked;
+    var autoOn = autoStopEnabled();
+    var text = '';
+    if (autoOn && liveOn) {
+      text = '收满整幅会自动停止录音；确认行数来自解码器，不靠时长估算。';
+    } else if (autoOn && !liveOn) {
+      text = '已开启自动停止：仍会实时解调以判断是否收满，只是不逐行上屏，停止后再出图。';
+    } else if (!autoOn && liveOn) {
+      text = '自动停止已关闭：画面照常逐行生长，但需要你手动点「停止录音」。';
+    } else {
+      text = '两个开关都关闭：只录音，不解调；停止后点「解码」再出图。';
+    }
+    hint.textContent = text;
+  }
+  ['#rx-live-on', '#rx-auto-stop'].forEach(function (sel) {
+    var el = $(sel);
+    if (el) el.addEventListener('change', refreshAutoHint);
+  });
+  refreshAutoHint();
 
   $('#rx-rec').addEventListener('click', async function () {
     var btn = $('#rx-rec');
@@ -931,20 +1164,34 @@
         var mm = String(Math.floor(t / 60)).padStart(2, '0');
         var ss = String(t % 60).padStart(2, '0');
         $('#rx-rec-time').textContent = mm + ':' + ss;
+        // 收满自动停止：真正的"停"放在这里做（主线程），而不是 liveFlush 里
+        // （音频线程）。见 liveCompleteAt 处的注释。
+        if (liveMaybeAutoStop()) {
+          setStatus($('#rx-status'), '整幅已接收完成，正在自动停止并精确重解…', 'ok');
+          finishRecording();
+        }
       }, 250);
 
       // 实时成像必须在拿到上下文之后立刻启动：解码器要用**麦克风的原生采样率**
       // 工作，这样既不必先重采样（省一次转换、少一层误差），也能把解调器与
       // 音频回调对齐到同一时间轴。
+      //
+      // 「自动停止」也需要解码器：只有它知道"整幅收满了没有"。所以两个开关只要
+      // 开了一个就启动解码器，区别只在要不要把解出的行画到画布上 —— 不画的时候
+      // 用户看不到逐行生长，但收满照样会停，停止后照样出图。
       var liveOn = $('#rx-live-on') && $('#rx-live-on').checked;
-      if (!liveOn) liveDec = null;
-      else liveStart(recCtx.sampleRate, rxModeHint());
+      var autoOn = autoStopEnabled();
+      if (!liveOn && !autoOn) liveDec = null;
+      else if (!liveStart(recCtx.sampleRate, rxModeHint(), liveOn)) liveDec = null;
+      livePaintOn = !!liveOn;
 
       btn.disabled = false;
       btn.textContent = '■ 停止录音';
       renderMicDiag(null);                          // 已成功，清掉诊断提示
       setStatus($('#rx-status'), liveDec
-        ? '录音中…画面会随信号逐行出现（' + recCtx.sampleRate + ' Hz）'
+        ? (liveOn
+            ? '录音中…画面会随信号逐行出现（' + recCtx.sampleRate + ' Hz）'
+            : '录音中…' + (autoOn ? '整幅收满后自动停止' : '') + '（' + recCtx.sampleRate + ' Hz）')
         : '录音中…请对准电台音频源', 'ok');
     } catch (err) {
       // 运行时错误：要让按钮恢复可用以便重试，同时给出精确归因
@@ -1136,12 +1383,15 @@
 
   $('#rx-png').addEventListener('click', function () {
     if (!rxDecoded) return;
-    $('#rx-preview').toBlob(function (blob) {
-      if (!blob) { setStatus($('#rx-status'), 'PNG 导出失败', 'err'); return; }
-      var name = 'sstv_' + rxDecoded.info.mode.replace(/\s+/g, '') + '_' + Date.now() + '.png';
-      download(blob, name);
-      setStatus($('#rx-status'), '已导出 ' + name, 'ok');
-    }, 'image/png');
+    var name = 'sstv_' + rxDecoded.info.mode.replace(/\s+/g, '') + '_' + Date.now() + '.png';
+    try {
+      $('#rx-preview').toBlob(function (blob) {
+        if (!blob) { setStatus($('#rx-status'), '导出失败：画布无法生成 PNG', 'err'); return; }
+        exportBlob(blob, name, '#rx-status');
+      }, 'image/png');
+    } catch (e) {
+      setStatus($('#rx-status'), '导出失败：' + e.message, 'err');
+    }
   });
 
   // ---------------------------------------------------------------- init --

@@ -219,6 +219,122 @@ console.log('\n=== 5. 边界：一次性整段喂入 / 空推送 / 重复 finish
 }
 
 // ===========================================================================
+// 帧时间轴：UI 靠 stats().frameEnd 判断"这一帧的信号是否已经全部到达"
+// ---------------------------------------------------------------------------
+// 为什么不能只看 rows：实时路径每解一行都要求行尾之后还有约 1.5 个行周期的数据，
+// 而发射方在最后一行之后就静音了 —— rows 会稳稳停在 H-2，永远等不到 H。
+// 所以"收满自动停止"必须有一个不依赖行数的判据，frameEnd 就是那个判据。
+{
+  for (const id of ['Martin M1', 'Robot 36', 'PD90']) {
+    const sr = SR_APP;
+    const mode = SSTV.modeById(id);
+    const samples = SSTV.encodeImage(mode, makeImage(mode.width, mode.height), sr);
+
+    // 只喂前半段：帧还没走完，frameEnd 必须已经能算出来且落在信号范围内
+    const dec = SSTV.createStreamDecoder(sr, null);
+    dec.push(samples.subarray(0, Math.floor(samples.length * 0.5)));
+    const st = dec.stats();
+
+    check(id + '：锁定制式后即给出帧时间轴（frameStart/frameEnd）',
+      st.frameStart > 0 && st.frameEnd > st.frameStart, JSON.stringify({
+        frameStart: st.frameStart, frameEnd: st.frameEnd
+      }));
+
+    // 帧长必须与制式自报的 frameDuration 一致（±1 个采样点，纯舍入差）
+    const span = (st.frameEnd - st.frameStart) / sr;
+    check(id + '：帧跨度与 mode.frameDuration 一致',
+      Math.abs(span - mode.frameDuration) < 1 / sr,
+      span.toFixed(3) + ' s vs ' + mode.frameDuration.toFixed(3) + ' s');
+
+    // 帧起点必须落在信号内、且在 VIS 头之后（不是 0，也不是录音开端）
+    check(id + '：帧起点落在 VIS 头之后、信号之内',
+      st.frameStart > 0 && st.frameStart < samples.length,
+      st.frameStart + ' / ' + samples.length);
+
+    // 这一位决定 UI 敢不敢"音频盖到帧尾就收手"：帧起点来自真正解出的引导音时可信，
+    // 来自 0.95 s 兜底估计时不可信（那种情况下必须再加一道行数门槛）。
+    check(id + '：含 VIS 引导音时 frameStartTrusted 为真',
+      st.frameStartTrusted === true, String(st.frameStartTrusted));
+
+    // 半段信号时，帧尾还没到 —— UI 不应误判为"收满"
+    check(id + '：只喂一半时 frameEnd 尚未覆盖（不该误触发自动停止）',
+      st.seconds < st.frameEnd / st.sr, st.seconds.toFixed(1) + ' s');
+
+    // 喂满整段 + 一段静音：真实麦克风在信号结束后会继续送静音，这也是 UI 能靠
+    // "已到达的音频覆盖了整帧"来收手的物理前提。
+    const pad = new Float32Array(Math.round(1.5 * sr));
+    const dec2 = SSTV.createStreamDecoder(sr, null);
+    dec2.push(samples);
+    dec2.push(pad);
+    const st2 = dec2.stats();
+    check(id + '：信号结束后继续送静音即可判定收满（可触发自动停止）',
+      st2.seconds >= st2.frameEnd / st2.sr,
+      st2.seconds.toFixed(2) + ' s ≥ ' + (st2.frameEnd / st2.sr).toFixed(2) + ' s');
+
+    // 估计的帧尾必须贴着真实信号长度：偏早会让最后一行的尾部被切掉，偏晚太多
+    // 则"等音频覆盖到 frameEnd"会白等很久，自动停止形同虚设。
+    // 实测偏差来源：编码器逐段 Math.round 到整数采样，累积起来每行比标称略短。
+    const overrunMs = (st.frameEnd - samples.length) / sr * 1000;
+    check(id + '：帧尾估计精度在 ±50 ms 内（不过早也不过度乐观）',
+      overrunMs > -50 && overrunMs < mode.frameDuration * 1000 * 0.02,
+      (overrunMs >= 0 ? '+' : '') + overrunMs.toFixed(1) + ' ms');
+  }
+
+  // 掐掉 VIS 头（前 700 ms 正好去掉两段 1900 Hz 引导音）：帧起点只能用兜底估计，
+  // 此时 frameStartTrusted 必须翻成 false，UI 才会额外加上行数门槛。
+  {
+    const sr = SR_APP;
+    const mode = SSTV.modeById('Robot 36');
+    const samples = SSTV.encodeImage(mode, makeImage(mode.width, mode.height), sr);
+    const cut = samples.subarray(Math.round(0.7 * sr));
+    const dec = SSTV.createStreamDecoder(sr, mode);   // 手动指定制式，不走 VIS 识别
+    dec.push(cut);
+    const st = dec.stats();
+    check('掐掉 VIS 头后 frameStartTrusted 为 false（不给 UI 过度乐观的信号）',
+      st.width > 0 && st.frameStartTrusted === false,
+      JSON.stringify({ w: st.width, trusted: st.frameStartTrusted }));
+  }
+}
+
+// ===========================================================================
+// 丢音后果的表征：尾部多喂一段音频，能不能把丢掉的行"找回来"？
+// ---------------------------------------------------------------------------
+// 这个问题直接决定"收满自动停止"安不安全：自动停止会在帧尾 + 0.5 s 就收手，
+// 比"一直录到用户手点停止"少喂若干秒音频。如果尾部音频能显著提高解出率，
+// 那自动停止就是在牺牲画面；如果不能，那它就纯粹是省了用户的等待与噪声。
+//
+// 丢音的物理形态就是静音（麦克风采集到静音，而不是"没有数据"），所以这里在
+// 信号中间挖一段静音来复现，比依赖 Chrome 那个会偶发丢音的假设备可控得多。
+{
+  const sr = SR_APP;
+  const mode = SSTV.modeById('Robot 36');
+  const clean = SSTV.encodeImage(mode, makeImage(mode.width, mode.height), sr);
+
+  for (const holeSec of [1.5, 3.0]) {
+    const holed = Float32Array.from(clean);
+    const a = Math.round(16 * sr), b = Math.round((16 + holeSec) * sr);
+    for (let i = a; i < b && i < holed.length; i++) holed[i] = 0;
+
+    const d1 = SSTV.createStreamDecoder(sr, null);
+    d1.push(holed); d1.finish();
+    const r1 = d1.stats().rows;
+
+    const d2 = SSTV.createStreamDecoder(sr, null);
+    d2.push(holed);
+    d2.push(new Float32Array(Math.round(5 * sr)));      // 帧后再补 5 s 静音
+    d2.finish();
+    const r2 = d2.stats().rows;
+
+    console.log('  丢音 ' + holeSec.toFixed(1) + ' s：帧尾收手 → ' + r1 +
+      ' 行；再补 5 s 静音 → ' + r2 + ' 行（差 ' + (r2 - r1) + '）');
+    check('丢音 ' + holeSec.toFixed(1) + ' s 后，尾部音频不改变解出行数（±2 行）',
+      Math.abs(r2 - r1) <= 2, r1 + ' vs ' + r2);
+    check('丢音 ' + holeSec.toFixed(1) + ' s 后仍能解出 ≥80% 行数（丢音是局部的）',
+      r1 >= mode.height * 0.8, r1 + '/' + mode.height);
+  }
+}
+
+// ===========================================================================
 console.log('\n---------------------------------------------');
 console.log('结果: ' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail === 0 ? 0 : 1);

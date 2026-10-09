@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -56,7 +57,12 @@ import java.io.FileOutputStream
  * 4. **文件导出**
  *    网页导出用的是 `<a download>` + `blob:`，WebView 不会为此落地文件，
  *    也**不会**触发 DownloadListener（那个只认 http/https 链接）。
- *    所以走 JS 桥：网页把内容转成 base64 交给原生，原生写进"下载/SSTV"。
+ *    所以走 JS 桥：网页把内容转成 base64 交给原生，原生写进系统相册 / 下载目录。
+ *
+ * 5. **"更像原生 App"**
+ *    页面本身按 `html.app-shell` 换成 App 版文案（不含任何"浏览器 / HTTPS 证书 /
+ *    双击 index.html"之类说明）；这里再补上原生触感：关掉长按弹出的文本选择菜单
+ *    （那是浏览器特征最明显的一处），并让返回键在应用内退出。
  */
 class MainActivity : AppCompatActivity() {
 
@@ -65,7 +71,7 @@ class MainActivity : AppCompatActivity() {
         const val DOMAIN = "appassets.androidplatform.net"
         const val START_URL = "https://$DOMAIN/assets/www/index.html"
         const val REQ_MIC = 1001
-        /** 导出目录：系统"下载"下的子目录，避免和用户其它文件混在一起 */
+        /** 导出目录：系统相册/下载下的子目录，避免和用户其它文件混在一起 */
         const val SUBDIR = "SSTV"
     }
 
@@ -129,6 +135,17 @@ class MainActivity : AppCompatActivity() {
             textZoom = 100
         }
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER)
+        // 长按弹出的"复制 / 全选 / 网页搜索"菜单是浏览器最明显的破绽：原生 App 里
+        // 没有这种东西。消费掉长按事件即不再触发文本选择 ActionMode；页面侧还有
+        // CSS 的 user-select:none 兜底（两处配合，单靠其中一处都不稳）。
+        // 代价是诊断文本在 App 里选不中 —— 页面侧就没给它放行 user-select，
+        // 两处行为保持一致。
+        webView.isLongClickable = false
+        webView.setOnLongClickListener { true }
+        // 双指缩放会露出"这是个网页"的观感，且会让画布像素对不齐
+        webView.settings.setSupportZoom(false)
+        webView.settings.builtInZoomControls = false
+        webView.settings.displayZoomControls = false
         webView.addJavascriptInterface(NativeBridge(), "SSTVNative")
 
         webView.webViewClient = object : WebViewClient() {
@@ -151,12 +168,13 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest,
                 error: WebResourceError
             ) {
-                // 本地资源加载失败 = 打包漏了文件，必须显式暴露，不能白屏了事
+                // 本地资源加载失败 = 打包漏了文件，必须显式暴露，不能白屏了事。
+                // 对用户说是"应用资源缺失"，括号里保留 assets/www 这个定位线索给排障用。
                 if (request.isForMainFrame) {
                     Log.e(TAG, "主框架加载失败 ${request.url}: ${error.description}")
                     Toast.makeText(
                         this@MainActivity,
-                        "页面资源缺失，请检查 assets/www 是否完整",
+                        "应用资源缺失，请重新安装应用（assets/www 不完整）",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -256,7 +274,7 @@ class MainActivity : AppCompatActivity() {
             // 注意：此方法运行在 WebView 的 JavaBridge 线程（不是主线程），IO 可以放心做
             val outcome = runCatching {
                 val bytes = Base64.decode(base64, Base64.DEFAULT)
-                storeToDownloads(name, mime, bytes)
+                storeFile(name, mime, bytes)
             }
             val ok = outcome.isSuccess
             val message = outcome.getOrElse {
@@ -278,19 +296,45 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ 落盘 --
 
-    private fun storeToDownloads(name: String, mime: String, bytes: ByteArray): String {
+    private fun storeFile(name: String, mime: String, bytes: ByteArray): String {
         val safeName = sanitizeFileName(name)
+        // 图片进「相册」，其它进「下载」。
+        //
+        // 为什么必须分开：用户说"保存图片"，期待的就是在系统相册里能看到。
+        // MediaStore.Downloads 写进去的文件**不会**进相册索引，只能在文件管理器里翻 ——
+        // 于是"我明明点了保存，相册里却没有"就成了一条报障，还很难解释清楚。
+        // 图片走 MediaStore.Images（Pictures/SSTV），系统会自动建立相册；
+        // WAV 这类非媒体文件放 Downloads/SSTV 更合适（否则会混进音乐库）。
+        val isImage = mime.startsWith("image/")
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            storeViaMediaStore(safeName, mime, bytes)
+            if (isImage) {
+                storeViaMediaStore(
+                    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                    Environment.DIRECTORY_PICTURES, safeName, mime, bytes
+                )
+            } else {
+                storeViaMediaStore(
+                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                    Environment.DIRECTORY_DOWNLOADS, safeName, mime, bytes
+                )
+            }
         } else {
-            storeViaFileApi(safeName, bytes)
+            storeViaFileApi(
+                if (isImage) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_DOWNLOADS,
+                safeName, bytes
+            )
         }
     }
 
-    /** Android 10+：走 MediaStore，无需存储权限，用户能在"下载"里直接看到 */
-    private fun storeViaMediaStore(name: String, mime: String, bytes: ByteArray): String {
-        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        val relDir = "${Environment.DIRECTORY_DOWNLOADS}/$SUBDIR/"
+    /** Android 10+：走 MediaStore，无需存储权限，用户能在相册/下载里直接看到 */
+    private fun storeViaMediaStore(
+        collection: Uri,
+        baseDir: String,
+        name: String,
+        mime: String,
+        bytes: ByteArray
+    ): String {
+        val relDir = "$baseDir/$SUBDIR/"
         val finalName = uniqueName(collection, relDir, name)
 
         val values = ContentValues().apply {
@@ -316,7 +360,8 @@ class MainActivity : AppCompatActivity() {
         values.clear()
         values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         contentResolver.update(uri, values, null, null)
-        return "已保存到 下载/$SUBDIR/$finalName"
+        val where = if (baseDir == Environment.DIRECTORY_PICTURES) "相册" else "下载"
+        return "已保存到 $where/$SUBDIR/$finalName"
     }
 
     /** 同名文件不覆盖，改成 name-1、name-2 …… 用户的导出不该互相踩掉 */
@@ -345,13 +390,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Android 9 及以下：直接写公共下载目录（已在清单里限制该权限的最大 SDK 版本） */
-    private fun storeViaFileApi(name: String, bytes: ByteArray): String {
+    /** Android 9 及以下：直接写公共目录（已在清单里限制该权限的最大 SDK 版本） */
+    private fun storeViaFileApi(baseDir: String, name: String, bytes: ByteArray): String {
         @Suppress("DEPRECATION")
-        val dir = File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            SUBDIR
-        )
+        val dir = File(Environment.getExternalStoragePublicDirectory(baseDir), SUBDIR)
         if (!dir.isDirectory && !dir.mkdirs()) {
             throw IllegalStateException("无法创建目录 ${dir.absolutePath}")
         }
@@ -364,7 +406,15 @@ class MainActivity : AppCompatActivity() {
             i++
         }
         FileOutputStream(target).use { it.write(bytes) }
-        return "已保存到 下载/$SUBDIR/${target.name}"
+        // API ≤28 上 MediaStore 不会自动收录新文件，必须显式通知媒体扫描器，
+        // 否则图片同样进不了相册 —— 老设备上就会复现"保存了但相册看不到"。
+        runCatching {
+            MediaScannerConnection.scanFile(
+                this, arrayOf(target.absolutePath), null, null
+            )
+        }
+        val where = if (baseDir == Environment.DIRECTORY_PICTURES) "相册" else "下载"
+        return "已保存到 $where/$SUBDIR/${target.name}"
     }
 
     private fun sanitizeFileName(raw: String): String {

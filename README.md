@@ -71,9 +71,12 @@ SSTV（Slow-Scan Television，慢扫描电视）是业余无线电的一项图�
 **安卓 App**
 - **WebView 壳 App**（`android/app/`）：把上面这套界面原样装进安卓，产出可直接安装的 APK
 - 复用同一份 JS 引擎，因此功能与 Web 版**完全一致**；构建时从 `web/` 同步，仓库里不存副本
-- 补齐了"浏览器有、WebView 没有"的四件事：**安全上下文**（用 `WebViewAssetLoader`
+- 补齐了"浏览器有、WebView 没有"的五件事：**安全上下文**（用 `WebViewAssetLoader`
   以 https 提供本地资源，麦克风才可用）、**运行时权限**、**文件导入**、**文件导出**
-  （写进系统的 `下载/SSTV/`）
+  （图片进系统**相册**的 `SSTV` 相簿、音频进 `下载/SSTV/`）、**像原生 App 的观感**
+- **App 模式两套文案**：同一份 `index.html` 按 `window.SSTVNative` 是否存在切换
+  `app-shell` / `web-shell`，App 里不再出现"装根证书 / 双击 index.html / 改站点权限"这类网页说明
+- **接收完成自动停止**：麦克风接收时收满整幅自动结束录音（判据来自解码器的帧时间轴，不是定时器）
 - **不申请 `INTERNET` 权限** —— 把"100% 离线"从代码承诺升级为系统级事实
 - **Gitee Go 云打包**：推送到 `main` 自动出 APK，本地不需要装 Android Studio
 
@@ -267,8 +270,8 @@ swift test          # 或在 Xcode 中打开 Package.swift
 ### 4.4 Android
 
 Android 端是一个 **WebView 壳 App**（`android/app/`）：把 `web/` 那份离线前端装进 WebView，
-补齐安全上下文、麦克风权限、文件导入导出这三件事。它复用同一份 JS 引擎，所以功能与 Web 版完全一致；
-详细取舍与踩坑见 **[android/README.md](android/README.md)**。
+补齐安全上下文、麦克风权限、文件导入导出、原生观感这几件事。它复用同一份 JS 引擎，所以功能
+与 Web 版完全一致；详细取舍与踩坑见 **[android/README.md](android/README.md)**。
 
 ```bash
 # 一条命令：自动装 Android SDK 并打包（需要 JDK 17，其余脚本自己搞定）

@@ -330,3 +330,42 @@ footer { text-align: center; color: var(--muted); font-size: 12px; padding: var(
 .toast.ok { border-color: var(--ok); color: var(--ok); }
 .toast.err { border-color: var(--danger); color: var(--danger); }
 @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+
+/* ===========================================================================
+   浏览器版 / 安卓壳 App 版：同一份 HTML，两套文案
+   ---------------------------------------------------------------------------
+   `html.app-shell` 由 index.html <head> 里的同步脚本打上（判据：window.SSTVNative
+   是否存在）。默认类名是 web-shell，所以纯静态打开 index.html 也能正常显示 ——
+   就算脚本被禁，看到的也是网页版文案，而不是一片空白。
+   =========================================================================== */
+.web-shell .only-app { display: none !important; }
+.app-shell .only-web { display: none !important; }
+
+/* ------------------------------------------------- 壳 App 的原生触感 ------ */
+/* 不追求"像 iOS"，只求不暴露"这底下是网页"：
+   · 关掉点击时那层半透明高亮方块（浏览器特征）
+   · 关掉长按文本选择与长按弹出菜单
+   · 关掉滚动到边界时的"橡皮筋"与光晕 */
+.app-shell,
+.app-shell body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 但输入框必须把选择能力还回去，否则没法正常编辑与粘贴。
+   注意这里**不**给状态行/诊断/说明正文放行：壳 App 那边还消费掉了长按事件
+   （MainActivity），放行也只是个半截功夫；真要让用户复制诊断文本，得去掉那个
+   监听器，而不是靠一条 CSS。两处保持一致，免得后来者按 CSS 猜行为。 */
+.app-shell input,
+.app-shell textarea { -webkit-user-select: text; user-select: text; }
+
+/* 刘海屏 / 手势条：顶栏与浮动提示让开安全区 */
+.app-shell .topbar { padding-top: max(var(--s4), env(safe-area-inset-top)); }
+.app-shell footer { padding-bottom: max(var(--s4), env(safe-area-inset-bottom)); }
+.app-shell .toast { bottom: calc(28px + env(safe-area-inset-bottom, 0px)); }
+
+/* 壳 App 里"录音完成"的进度条走满后不该继续跳，交给 .complete 收势 */
+.recv-chip.complete { color: var(--ok); border-color: var(--ok); }
+.app-shell .recv-overlay .recv-line { will-change: top; }
