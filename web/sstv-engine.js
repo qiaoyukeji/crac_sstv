@@ -268,30 +268,95 @@
     }
     return runs;
   }
-  function decodeVis(freq, sr) {
-    var near = new Uint8Array(freq.length);
-    for (var i = 0; i < freq.length; i++) near[i] = (Math.abs(freq[i] - 1900) < 150) ? 1 : 0;
-    var runs = _runs(near, Math.floor(0.2 * sr));
-    if (runs.length === 0) return [null, null];
-    var leaderEnd = runs[0][1];
-    var startBitPos = leaderEnd + Math.floor((VIS.MSEC_BREAK + VIS.MSEC_LEADER) / 1000 * sr);
-    var cell = Math.floor(VIS.MSEC_BIT / 1000 * sr);
+  /** 从 startBitPos 起读 10 个 cell 的中位频率；数据还不够时返回 null（=再等等）。 */
+  function readVisCells(freq, startBitPos, cell, cells) {
     var end = startBitPos + 10 * cell;
-    if (end > freq.length) return [null, null];
-    var cells = [];
+    if (end > freq.length) return null;
     for (var k = 0; k < 10; k++) {
       var a = startBitPos + k * cell, b = startBitPos + (k + 1) * cell;
-      var seg = []; for (var x = a; x < b; x++) seg.push(freq[x]);
+      var seg = [];
+      for (var x = a; x < b; x++) seg.push(freq[x]);
       seg.sort(function (p, q) { return p - q; });
-      cells.push(seg[Math.floor(seg.length / 2)]);
+      cells[k] = seg[Math.floor(seg.length / 2)];
     }
-    var bits = [];
-    for (var bi = 1; bi < 8; bi++)
-      bits.push((Math.abs(cells[bi] - VIS.FREQ_BIT1) < Math.abs(cells[bi] - VIS.FREQ_BIT0)) ? 1 : 0);
-    var vis = 0;
-    for (var bb = 0; bb < 7; bb++) if (bits[bb]) vis |= (1 << bb);
-    return [vis, bits];
+    return end;
   }
+  function cellBit(f) {
+    return (Math.abs(f - VIS.FREQ_BIT1) < Math.abs(f - VIS.FREQ_BIT0)) ? 1 : 0;
+  }
+  /**
+   * 该 cell 是不是 1200 Hz 的**结构位**（起始位 / 停止位）。
+   *
+   * 不能用 cellBit 来判断：1200 Hz 正好落在 1100（bit1）与 1300（bit0）的**正中间**，
+   * 用它判等于掷硬币 —— 实测同一段信号里，起始位（1200.4 Hz）判成 0、停止位
+   * （1199.6 Hz）判成 1，于是校验永远通不过。所以这里改判"离三者中谁最近"。
+   */
+  function isSyncCell(f) {
+    var d = Math.abs(f - VIS.FREQ_SYNC);
+    return d < Math.abs(f - VIS.FREQ_BIT1) && d < Math.abs(f - VIS.FREQ_BIT0);
+  }
+  /**
+   * 解 VIS，返回 [vis 码, 7 位数据, 帧起点采样位置]；解不出返回 [null, null, 0]。
+   *
+   * 为什么要逐个候选连段尝试、而不是只看第一个"1900 Hz 附近"的连段：
+   *
+   *   `runs[0]` 未必是真正的引导音。录音开头完全可能有同频段的干扰 —— 上一张图的
+   *   尾巴、操作员说话（人声在 1.7–2 kHz 有能量）、静噪开启前的噪声等。旧实现一旦
+   *   挑错连段，就会拿**图像数据**当 VIS 位去读，读出一个"看起来合法、其实是别的
+   *   制式"的码。后果非常严重：帧长按错制式算 → UI 在对方还在发射时就判定"整幅已
+   *   接收完成" → 提前收手，画面只剩零头（实测能提前 19~78 s）。
+   *
+   * 所以这里用三个**结构性**约束把候选筛掉（不靠"运气好"）：
+   *   · 起始位与停止位都必须是 1200 Hz —— VIS 头两端各有一个 1200 Hz 的 30 ms 位，
+   *     这是最强的结构特征。窗口一旦错位（比如连段把引导音与数据粘在一起），这两个
+   *     cell 会落在图像数据上，几乎必然判不过。
+   *   · 7 位数据的奇偶校验必须相符 —— 发射端总是按标准置校验位。
+   *   · 解出的 VIS 必须是本工具支持的制式。
+   *
+   * 每个连段还试两种对齐假设（见循环里的 gap / 0）：一个连段既可能是"第一个引导音"，
+   * 也可能本身就是"第二个引导音"（录音从第一个引导音中间才开始时就是这种）。
+   * 只试一种的话，第二种情形会整体错开约 0.31 s，读到的就是图像数据。
+   *
+   * 顺带把帧起点也一起返回：它就是 VIS 头的结束位置。这样"制式"与"帧起点"来自
+   * **同一次校验过的读取**，不会像以前那样由 decodeVis / visEnd 各自独立去猜第一个
+   * 连段 —— 两处一旦猜得不一样，帧尾就会算错。
+   */
+  function decodeVisAt(freq, sr) {
+    var near = new Uint8Array(freq.length);
+    for (var i = 0; i < freq.length; i++) {
+      near[i] = (Math.abs(freq[i] - VIS.FREQ_LEADER) < 150) ? 1 : 0;
+    }
+    // 阈值取 0.12 s 而不是标准的 0.3 s：标准引导音是 300 ms，但录音很可能从引导音
+    // 中间才开始（用户听到声音才按录音），或者个别发射端引导音偏短。门槛放低只会
+    // 多出几个**候补**，而候补全都要过上面那三道校验 —— 宁可多试，不可漏掉真头。
+    var runs = _runs(near, Math.floor(0.12 * sr));
+    var cell = Math.floor(VIS.MSEC_BIT / 1000 * sr);
+    var gap = Math.floor((VIS.MSEC_BREAK + VIS.MSEC_LEADER) / 1000 * sr);
+    var cells = new Array(10);
+    for (var ri = 0; ri < runs.length; ri++) {
+      for (var h = 0; h < 2; h++) {                  // 两种对齐假设都试
+        var startBitPos = runs[ri][1] + (h === 0 ? gap : 0);
+        var end = readVisCells(freq, startBitPos, cell, cells);
+        // 数据不够：这一支以及后面所有候选（位置只会更靠后）都不够 —— 等下一块音频。
+        if (end == null) { if (h === 0) continue; return [null, null, 0]; }
+        if (!isSyncCell(cells[0])) continue;        // 起始位不是 1200 Hz → 不是 VIS 头
+        if (!isSyncCell(cells[9])) continue;        // 停止位不是 1200 Hz → 同上
+        var bits = [], ones = 0;
+        for (var bi = 1; bi < 8; bi++) {
+          var b = cellBit(cells[bi]);
+          bits.push(b); ones += b;
+        }
+        if (cellBit(cells[8]) !== (ones % 2 === 1 ? 1 : 0)) continue;   // 奇偶校验不符
+        var vis = 0;
+        for (var bb = 0; bb < 7; bb++) if (bits[bb]) vis |= (1 << bb);
+        if (!modeByVis(vis)) continue;              // 不是本工具支持的制式
+        return [vis, bits, end];
+      }
+    }
+    return [null, null, 0];
+  }
+  /** 兼容出口：只要 [vis 码, 7 位数据]，不关心帧起点。 */
+  function decodeVis(freq, sr) { var r = decodeVisAt(freq, sr); return [r[0], r[1]]; }
 
   // -------------------------------------------------------------- Encode ----
   function filled(f, n) { var a = new Float64Array(n); for (var i = 0; i < n; i++) a[i] = f; return a; }
@@ -430,10 +495,18 @@
     var minLen = Math.floor(0.6 * syncDur * sr);
     var runs = findRuns(near, minLen);
     if (runs.length === 0) return null;
-    var best = null, bestLen = -1;
+    // 取**长度最接近 syncDur** 的那一段，而不是最长的。
+    //
+    // 行同步的长度是制式已知的几何量（Robot 36 是 9 ms、PD 是 20 ms）；而 VIS 头里
+    // 同样有 1200 Hz 结构位：break 10 ms、起始位/停止位各 30 ms。它们**比行同步还长**，
+    // 所以"取最长连段"会在搜索窗口扫过 VIS 头时优先选中结构位 —— 实测手动指定制式
+    // 时锚点被锁到 VIS 的 break 上（3.30 s，真值 3.91 s），整幅画面整体错位。
+    var want = Math.round(syncDur * sr);
+    var best = null, bestErr = Infinity;
     for (var k = 0; k < runs.length; k++) {
       var len = runs[k][1] - runs[k][0];
-      if (len > bestLen) { bestLen = len; best = runs[k][0] + lo; }
+      var err = Math.abs(len - want);
+      if (err < bestErr) { bestErr = err; best = runs[k][0] + lo; }
     }
     return best;
   }
@@ -502,14 +575,18 @@
   function decodeSamples(samples, sr, modeHint) {
     sr = sr || 44100;
     var freq = estimateFrequency(samples, sr);
-    var vis = null, mode = modeHint || null;
+    var vis = null, mode = modeHint || null, visEndPos = 0;
     if (!mode) {
-      var dv = decodeVis(freq, sr);
+      var dv = decodeVisAt(freq, sr);
       vis = dv[0];
       mode = vis != null ? modeByVis(vis) : null;
       if (!mode) throw new Error('Could not detect VIS / unknown mode');
+      visEndPos = dv[2];
     }
-    var searchStart = visEnd(freq, sr);
+    // 帧起点优先取**刚才那次校验过的 VIS 头结束位置** —— 与制式来自同一次读取，
+    // 不会出现"制式认 A、起点按 B 算"。只有手动指定制式（根本没读 VIS）时，
+    // 才退回独立搜索引导音位置。
+    var searchStart = visEndPos > 0 ? visEndPos : visEnd(freq, sr);
     var step = mode.lineDuration(0) * sr;
     var nLines = (mode.kind === 'pd') ? mode.height / 2 : mode.height;
     var syncStarts = [], pos = searchStart;
@@ -614,6 +691,8 @@
     var phase = 'vis', err = null;
     var mode = modeHint || null;
     var vis = null;
+    /** 校验通过的 VIS 头结束位置；0 = 还没读到（手动指定制式时一直是 0） */
+    var visPos = 0;
     var W = 0, H = 0, step = 0, nLines = 0, lineIdx = 0, rows = 0;
     var pos = 0, misses = 0, locked = false, lastSync = 0;
     var rgbF = null, ycbcrB = null, outRgb = null;
@@ -621,16 +700,48 @@
     // 而不是"录音开始时刻" —— 用户完全可能先按录音、对方几秒后才发射。有了它，
     // stats() 才能给出"这一帧到哪个采样点结束"，UI 就能在信号播完时准确收手。
     var frameStart = 0;
-    /** frameStart 是否来自真正找到的 VIS 引导音（false = 0.95 s 的兜底估计） */
+    /**
+     * frameStart 的来源，UI 靠它决定"帧尾能不能信"：
+     *   'vis'  —— 来自一次**校验通过**的 VIS 头读取（最可靠）
+     *   'sync' —— 没读到校验通过的 VIS 时，退而用**第一次锁定的同步脉冲**当锚点
+     *             （行首本身就是一个同步脉冲，所以它与"帧起点"是同一类东西）
+     *   'none' —— 还不知道。此时 frameStart = 0、frameEnd 也为 0，
+     *             UI 不会拿"帧长"去判断收没收到，避免提前收手
+     */
+    var frameStartSource = 'none';
+    /** 兼容旧口径：frameStart 是否来自**校验通过的 VIS 头**（'sync' 锚点不算） */
     var frameStartTrusted = false;
 
     function beginTrack() {
       W = mode.width; H = mode.height;
       step = mode.lineDuration(0) * sr;
       nLines = (mode.kind === 'pd') ? (mode.height >> 1) : mode.height;
-      var ve = visEndInfo(freq.subarray(0, freqLen), sr);
-      pos = ve[0]; frameStartTrusted = ve[1];
-      frameStart = pos;
+      if (visPos > 0) {
+        // 制式与帧起点来自同一次校验过的 VIS 读取 —— 不会再出现"制式按 A 算、
+        // 起点按另一个连段算"的错配（那正是帧尾算错的来源）。
+        pos = visPos; frameStart = visPos; frameStartSource = 'vis';
+      } else {
+        // 手动指定制式，或自动模式没读到**校验通过**的 VIS 头。
+        // 这里要分两步，顺序不能颠倒：
+        //
+        // ① 先试着读一次 VIS —— 只取**位置**，制式仍听用户的。用户手动指定制式
+        //    是为了覆盖"制式认错"，与"帧从哪开始"无关；VIS 头的结束位置就是帧
+        //    起点，这是最准的锚点。取不到才往下走。
+        // ② 退而求其次：拿 visEndInfo（"第一个 1900 Hz 连段"）给的估计值当**搜索
+        //    入口**，但**绝不能把它当成帧起点** —— 它只看频率、不校验 VIS 内容，
+        //    是个纯启发式。录音开头若有一段同频干扰就会明显偏早：实测一段 0.6 s
+        //    的杂散 1900 Hz 音让帧尾早了 0.61 s，杂散音更长时切掉的画面更多。
+        //    帧起点改由 advance() 里**第一个真正锁定的同步脉冲**给出（'sync'）。
+        var fv0 = freq.subarray(0, freqLen);
+        var dv0 = decodeVisAt(fv0, sr);
+        if (dv0[0] != null) {
+          visPos = dv0[2]; pos = visPos; frameStart = visPos; frameStartSource = 'vis';
+        } else {
+          pos = visEndInfo(fv0, sr)[0];
+          frameStart = 0; frameStartSource = 'none';
+        }
+      }
+      frameStartTrusted = (frameStartSource === 'vis');
       outRgb = new Uint8Array(H * W * 3);
       if (mode.kind === 'rgb') { rgbF = new Float64Array(H * W * 3); ycbcrB = null; }
       else { rgbF = null; ycbcrB = new Float64Array(H * W * 3); }
@@ -733,6 +844,37 @@
           pos += step * 0.5;
           continue;
         }
+        if (!locked && frameStartSource === 'none') {
+          // 手动指定制式、又没读到 VIS：帧起点无从得知，用**第一次锁定的同步脉冲**
+          // 当锚点。行首就是一个同步脉冲，所以它与"帧起点"是同一类东西。
+          // 为什么不能一直用 0.95 s 那个兜底值：它假设"录音一开始就是信号"，
+          // 而现实中往往是先按录音、对方几秒后才发射 —— 兜底值会明显偏早，
+          // UI 拿它算帧尾，就会在对方还在发射时提前判定"接收完成"。
+          //
+          // 但"第一次锁定"必须先有**旁证**：真正的行首后面约一个行周期处必然还有
+          // 下一个同步脉冲（行同步是周期性的）。只认一个孤立的 1200 Hz 连段是不够
+          // 的 —— VIS 头里也有 1200 Hz 结构位（break 10 ms、起始位/停止位各 30 ms），
+          // 单看一个连段分不出它与行同步。实测：手动指定制式 + 先录 3 s 静音时，
+          // 滑窗先撞上 VIS 的 break，锚点落在 3.30 s（真值 3.91 s），随后整幅画面
+          // 整体错位，且 240 行提前 0.23 s 就凑齐 —— 正是用户看到的"图看不出来 +
+          // 对方还在发送就提示接收完成"。
+          var nxtLo = Math.floor(s + 0.6 * step);
+          var nxtHi = Math.floor(s + 1.4 * step);
+          // 音频还没覆盖到"下一个脉冲该在的位置"时不能下结论，等下一块再判 ——
+          // 否则会把"数据还没到"误当成"间距不对"。
+          if (!tail && nxtHi > freqLen) return;
+          var nxt = findSync(fv, nxtLo, nxtHi, sr, mode.syncDurS);
+          if (nxt == null || Math.abs(nxt - s - step) > 0.25 * step) {
+            // 覆盖到了却找不到，或间距对不上 → 这不是行同步，继续往前找。
+            // 必须**往前走**而不是原地等：VIS 的 break 之后紧跟的是 1900 Hz 引导音，
+            // 那一段里根本不存在下一个 1200 Hz 脉冲，原地等就永远等不到（实测会一
+            // 行都锁不上，整段录音作废）。
+            if (tail) { frameStart = s; frameStartSource = 'sync'; }   // 收尾时只能认了
+            else { misses++; pos = s + step * 0.5; continue; }
+          } else {
+            frameStart = s; frameStartSource = 'sync';
+          }
+        }
         misses = 0; locked = true; lastSync = s;
         var li = (mode.kind === 'pd') ? (lineIdx << 1) : lineIdx;
         readLineInto(mode, fv, sr, s, li, rgbF, ycbcrB);
@@ -747,9 +889,9 @@
       if (phase === 'vis') {
         if (!mode) {
           if (freqLen < VIS_MIN) return;
-          var dv = decodeVis(freq.subarray(0, freqLen), sr);
-          if (dv[0] == null) return;                 // 继续等 VIS 头
-          vis = dv[0];
+          var dv = decodeVisAt(freq.subarray(0, freqLen), sr);
+          if (dv[0] == null) return;                 // 继续等一个**校验通过**的 VIS 头
+          vis = dv[0]; visPos = dv[2];
           mode = modeByVis(vis);
           if (!mode) { err = 'VIS ' + vis + ' 不属于本工具支持的制式'; phase = 'done'; return; }
         }
@@ -787,8 +929,8 @@
         }
         if (phase === 'vis') {
           if (!mode && freqLen > 0) {
-            var dv = decodeVis(freq.subarray(0, freqLen), sr);
-            if (dv[0] != null) { vis = dv[0]; mode = modeByVis(vis) || null; }
+            var dv = decodeVisAt(freq.subarray(0, freqLen), sr);
+            if (dv[0] != null) { vis = dv[0]; visPos = dv[2]; mode = modeByVis(vis) || null; }
           }
           if (mode && freqLen >= HEAD_MIN) beginTrack();
         }
@@ -813,10 +955,15 @@
           // 帧时间轴（采样点，相对送进来的第一块音频）。UI 靠它判断"这一帧的信号
           // 是否已经全部到达" —— 只看 rows 是不够的：实时路径要等行尾之后约
           // 1.5 个行周期的数据才肯解最后一行，而发射方在最后一行之后就没有信号了，
-          // 于是 rows 会永远停在 H-2 左右。帧长由制式唯一决定，是更硬的判据。
+          // 于是 rows 会永远停在 H-2 左右。
+          //
+          // frameEnd 只有 frameStart > 0 时才有值，而 frameStart 只在"真的有锚点"
+          // 时才非 0。这不是细节：拿一个**猜出来的**帧起点去算帧尾，会在对方还在
+          // 发射时就把画面截断。帧起点不知道就让 frameEnd = 0，UI 自然不敢用它。
           frameStart: frameStart,
           frameEnd: (mode && frameStart > 0) ? frameStart + mode.frameDuration * sr : 0,
           frameStartTrusted: frameStartTrusted,
+          frameStartSource: frameStartSource,
           stepS: mode ? step / sr : 0,
           seconds: bufLen / sr, sr: sr
         };
@@ -854,7 +1001,8 @@
     synthTones: synthTones, estimateFrequency: estimateFrequency,
     rgbToYCbCr: rgbToYCbCr, ycbcrToRgb: ycbcrToRgb,
     imageToArrays: imageToArrays, yuvBytesToRgb: yuvBytesToRgb,
-    visSegments: visSegments, visSamples: visSamples, decodeVis: decodeVis,
+    visSegments: visSegments, visSamples: visSamples,
+    decodeVis: decodeVis, decodeVisAt: decodeVisAt,
     encodeImage: encodeImage, decodeSamples: decodeSamples, encodeWAV: encodeWAV,
     readLineInto: readLineInto, createStreamDecoder: createStreamDecoder
   };

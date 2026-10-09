@@ -235,5 +235,14 @@ cp android/keystore.properties.example android/keystore.properties
    （`createStreamDecoder`，支撑麦克风"边收边成像"）在 `sstv-engine/` 中还没有对应实现。
    当前 App 走 WebView，用的是 JS 那份，所以没有功能缺口；将来真要切原生 Compose，
    这块是必须补的第一件事。
+   > 因此**"接收收满自动停止"的那三条判据（`liveCompletionReason`）在 Kotlin 侧不存在** ——
+   > 它属于流式路径。但两侧**共享的部分必须逐条对齐**，已经踩过一次：JS 侧查出 VIS 头
+   > 只认"第一个 1900 Hz 连段"、不校验起止位与奇偶校验（会被录音开头的同频干扰骗到，
+   > 认错制式后帧长算错、提前 19~78 s 收手），Kotlin 侧是同一份逻辑、同一个缺陷。
+   > 现在两侧都改成"多候选 + 两种对齐 + 结构校验（起止位 1200 Hz / 偶校验 / 制式受支持）"，
+   > 连 `findSync` 的"取长度最接近 `syncDur` 的连段"这条也一致了 ——
+   > 对应用例见 `SSTVEngineTest.visRejectsBadParity` / `visSurvivesStrayTone` /
+   > `visSurvivesShortFirstLeader`，JS 侧见 `web/test/diag_autostop_real.cjs`。
+   > **改引擎数学时，两个端口要一起改、一起测。**
 6. **本地路径含中文时不要直接调 Gradle**：`ci-build-apk.sh` 会自动兼容，手工调
    `./gradlew` 则会撞上 Gradle 在 Windows 上的 `@argfile` 编码缺陷 —— 详见"本地构建"一节。

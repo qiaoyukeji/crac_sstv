@@ -11,16 +11,24 @@ object SSTVDecode {
         val freq = SSTVDSP.estimateFrequency(samples, sr)
 
         var vis: Int? = null
+        // 帧起点优先取**校验过的 VIS 头结束位置**（与制式来自同一次读取）。手动指定
+        // 制式时也先试着读一次 VIS —— 只取位置、制式仍听用户的：用户手动指定是被
+        // "制式认错"逼的，与"这一帧从哪开始"无关。取不到才退回独立搜索引导音位置。
+        // 这一步不是可有可无：拿"第一个 1900 Hz 连段"的启发式估计当帧起点，录音开头
+        // 有一段同频干扰就会明显偏早，整幅画面随之整体错位（参考实现实测帧尾早 0.61 s）。
+        val visEndPos: Int
         val mode: SSTVMode
         if (modeHint != null) {
             mode = modeHint
+            visEndPos = SSTVVIS.decode(freq, sr) { SSTVMode.byVis(it) != null }.frameStart
         } else {
-            val (v, _) = SSTVVIS.decode(freq, sr)
-            vis = v
+            val r = SSTVVIS.decode(freq, sr) { SSTVMode.byVis(it) != null }
+            vis = r.vis
+            visEndPos = r.frameStart
             // 括号不能省：`if (c) a else b ?: return` 会被解析成 `if (c) a else (b ?: return)`，
             // 也就是"else 分支必然返回"，整个 if 的类型就退化成了 `SSTVMode?`，
             // 赋给非空变量直接报错，还会把后续所有 `round()` 级联成"未解析引用"。
-            val m = (if (v != null) SSTVMode.byVis(v) else null)
+            val m = (if (vis != null) SSTVMode.byVis(vis) else null)
                 ?: return SSTVDecodeResult(
                     SSTVImage(0, 0, intArrayOf()),
                     mapOf("vis" to (null as Any?), "mode" to "", "lines" to 0)
@@ -30,7 +38,7 @@ object SSTVDecode {
 
         val w = mode.width
         val h = mode.height
-        val searchStart = visEnd(freq, sr)
+        val searchStart = if (visEndPos > 0) visEndPos else visEnd(freq, sr)
         val step = (mode.lineDuration(0) * sr.toDouble()).toInt()
         val nLines = if (mode.kind == "pd") h / 2 else h
 
@@ -154,7 +162,14 @@ object SSTVDecode {
         val near = BooleanArray(hi - lo) { kotlin.math.abs(freq[lo + it] - SSTVCalibration.SYNC_HZ) < 120 }
         val minLen = (0.6 * syncDur * sr.toDouble()).toInt()
         val runs = findRuns(near, minLen)
-        val best = runs.maxByOrNull { it.second - it.first } ?: return null
+        // 取**长度最接近 syncDur** 的那一段，而不是最长的。
+        //
+        // 行同步的长度是制式已知的几何量（Robot 36 是 9 ms、PD 是 20 ms）；而 VIS 头里
+        // 同样有 1200 Hz 结构位（break 10 ms、起始位/停止位各 30 ms），它们**比行同步
+        // 还长**，所以"取最长连段"会在搜索窗口扫过 VIS 头时优先选中结构位。参考实现
+        // web/sstv-engine.js 实测：窗口扫过 VIS 头时锚点被锁到 break 上，整幅画面整体错位。
+        val want = (syncDur * sr.toDouble()).toInt()
+        val best = runs.minByOrNull { kotlin.math.abs((it.second - it.first) - want) } ?: return null
         return lo + best.first
     }
 

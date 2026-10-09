@@ -952,6 +952,18 @@
    */
   var LIVE_TAIL_S = 0.5;    // 整帧之后再多收一点，确保最后一行数据完整
 
+  /**
+   * 帧长判据要求的最低"行数占比"。这是**旁证**，用来识破"制式认错了"。
+   *
+   * 为什么非要它：帧长由制式唯一决定，而制式来自 VIS。VIS 一旦被认成另一个帧长更短
+   * 的制式，时间轴就会在对方还在发射的时候走完 —— 实测能提前 19~78 s 收手，画面
+   * 只剩零头，用户看到的正是"提示接收完成、但图看不出来"。
+   *
+   * 0.8 取自实测的两簇数据：认错制式时行数占比是 0%（240 行里一行没解出）、
+   * 39%、51%；而正常接收（含中途 3 s 衰落）都在 92% 以上。中间留了很宽的间隔。
+   */
+  var LIVE_MIN_ROW_FRACTION = 0.8;
+
   /** 连续丢失行同步多久算"发射已结束"。取帧长的 25%，并夹在 8–15 s：
    *  这是**兜底**判据，宁可多等几秒都不要提前收手 —— 提前收手的代价是画面被切掉，
    *  而多等的代价只是用户多等一会儿（随时可以手动停止）。
@@ -965,15 +977,24 @@
 
   function liveCompletionReason(st) {
     if (!st || !st.width) return null;
+
+    // ① 行数收满 —— 最确定，自己就够，不需要旁证。
     if (st.totalRows > 0 && st.rows >= st.totalRows) return 'rowCount';
+
+    // ② 音频已覆盖整帧 —— 主力判据，但需要两个前提：
+    //    · frameEnd > 0：帧起点必须**真的有锚点**（校验过的 VIS 头，或第一次锁定的
+    //      同步脉冲）。猜出来的位置不算 —— 拿它算帧尾等于赌，赌输就是把画面截断。
+    //    · 行数接近收满：见 LIVE_MIN_ROW_FRACTION 的说明。
     if (st.frameEnd > 0 && st.seconds >= st.frameEnd / st.sr + LIVE_TAIL_S) {
-      // 帧起点是真正找到 VIS 导引音算出来的 → 帧尾可信，音频盖到就收手。
-      if (st.frameStartTrusted) return 'frameEnd';
-      // 没有导引音（手动指定制式且信号缺头）→ 帧起点只是 0.95 s 的兜底估计，
-      // 可能明显偏早。这时再要一道"行数接近收满"的门槛，免得切掉大半幅。
-      if (st.rows >= st.totalRows * 0.9) return 'frameEnd';
+      if (st.rows >= st.totalRows * LIVE_MIN_ROW_FRACTION) return 'frameEnd';
     }
+
+    // ③ 长时间收不到同步脉冲 —— 兜底。用于"接收方在发射中途才开始录音"，以及
+    //    对方突然停发。额外要求"音频已经覆盖到帧尾"：否则一次深衰落（实测 12 s
+    //    静音）会在帧内就触发，把衰落之后本来还能收到的信号一起切掉 —— 帧尾才是
+    //    "对方按时间该发完了"的时刻，过了它还没同步，才谈得上"发射已结束"。
     if (st.locked && st.rows > 0 && st.stepS > 0 &&
+        (st.frameEnd <= 0 || st.seconds >= st.frameEnd / st.sr) &&
         st.misses * st.stepS * 0.5 >= liveLostSeconds(st)) return 'lostSync';
     return null;
   }
@@ -985,7 +1006,9 @@
              ' s 以上，按发射结束处理（画面为此前收到的部分）';
     }
     if (reason === 'rowCount') return '整幅行数已全部收满';
-    return '整帧信号已收完（' + (st.frameEnd / st.sr).toFixed(1) + ' s）';
+    var src = st.frameStartSource === 'sync' ? '帧起点取自首个同步脉冲'
+                                           : '帧起点取自 VIS 头';
+    return '整帧信号已收完（' + (st.frameEnd / st.sr).toFixed(1) + ' s，' + src + '）';
   }
 
   function liveFlush() {
@@ -1308,6 +1331,11 @@
     }
     var head = '实时成像完成：' + liveRes.width + '×' + liveRes.height +
       ' · 逐行收到 ' + liveRes.rows + ' 行';
+    // 行数明显不足整幅时，最可能的原因不是"信号差"而是**制式被认错**（帧长不对，
+    // 时间轴提前走完）。此时"自动识别"往往也不可靠，所以直接给出可操作的出路。
+    if (liveRes.rows < liveRes.height * LIVE_MIN_ROW_FRACTION) {
+      head += '（不足整幅 —— 制式可能识别有误，可在上方手动指定制式后点「解码」重试）';
+    }
     setStatus($('#rx-status'), head + '（正在精确重解校验…）', 'ok');
 
     try {
