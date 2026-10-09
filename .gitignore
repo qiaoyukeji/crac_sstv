@@ -44,6 +44,16 @@ local.properties
 .idea/
 *.iml
 
+# 签名材料：泄露等于任何人都能以你的名义发版
+android/keystore.properties
+android/keystore/
+*.jks
+*.keystore
+
+# 由 android/app/build.gradle.kts 的 syncWebAssets 任务生成（真源是仓库根的 web/），
+# 入库只会制造"网页改了、APK 里还是旧的"这种副本漂移
+android/app/src/main/assets/www/
+
 # ------------------------------------------------- 本地自签证书（含私钥）--
 # ca.key 是本地 CA 的根私钥，绝不能进版本库；证书的 SAN 里写死了本机内网 IP，
 # 也属于机器相关产物。首次运行 `python web/serve.py`（或 web/tools/gen_cert.py）

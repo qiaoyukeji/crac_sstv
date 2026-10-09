@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与网页底色一致：这样从图标点击到页面渲染，全程没有白闪 -->
+    <color name="sstv_bg">#FF0A0F15</color>
+    <color name="ic_launcher_background">#FF0A0F15</color>
+    <color name="sstv_accent">#FF2DD4BF</color>
+</resources>

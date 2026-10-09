@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      固定用深色主题（不带 DayNight）：
+      前端界面本身就是深色设计，跟随系统切到浅色只会得到"深色页面 + 浅色系统栏"的割裂观感，
+      而且状态栏图标会变黑、落在深色底上反而看不见。
+    -->
+    <style name="Theme.SSTV" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/sstv_bg</item>
+        <item name="android:statusBarColor">@color/sstv_bg</item>
+        <item name="android:navigationBarColor">@color/sstv_bg</item>
+    </style>
+</resources>

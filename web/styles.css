@@ -303,3 +303,30 @@ select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-vis
 }
 
 footer { text-align: center; color: var(--muted); font-size: 12px; padding: var(--s4); }
+
+/* 浮动提示：导出结果这类"一句话反馈"。
+   之所以不用 alert()：它会打断录音/播放，而且安卓壳 App 里原生 Toast 会被系统折叠，
+   页面内再给一条才看得清。 */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translate(-50%, 12px);
+  max-width: min(92vw, 520px);
+  padding: 10px 16px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+  z-index: 60;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.ok { border-color: var(--ok); color: var(--ok); }
+.toast.err { border-color: var(--danger); color: var(--danger); }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }

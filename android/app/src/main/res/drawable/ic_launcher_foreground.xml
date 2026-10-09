@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 前景层：三条"扫描线" + 一个信号点，呼应 SSTV 逐行扫描的成像方式 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M32,41 L76,41 L76,48 L32,48 Z" />
+    <path
+        android:fillColor="#E6FFFB"
+        android:pathData="M32,53 L76,53 L76,60 L32,60 Z" />
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M32,65 L58,65 L58,72 L32,72 Z" />
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M78,34 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+</vector>

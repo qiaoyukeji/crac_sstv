@@ -151,7 +151,7 @@ object SSTVDSP {
         val twoPi = 2.0 * PI
         for (i in 1 until phase.size) {
             var diff = phase[i] - phase[i - 1]
-            diff -= twoPi * (diff / twoPi).round()
+            diff -= twoPi * round(diff / twoPi)
             phase[i] = phase[i - 1] + diff
         }
     }

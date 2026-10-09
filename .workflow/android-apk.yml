@@ -1,0 +1,70 @@
+# Gitee Go 流水线 · 安卓云打包
+#
+# 触发方式：
+#   · 推送到 main 分支时自动跑
+#   · 也可以在仓库页「Gitee Go → 流水线」里点「运行」手动跑
+#   · 首次使用需要先在仓库页开通 Gitee Go（免费额度：单仓库 200 分钟）
+#
+# 产物在哪：
+#   构建结束后，本次构建的「制品」区可直接下载 BUILD_ARTIFACT（APK 目录打包）；
+#   同时 publish 阶段会把它发布到「发布记录」，那里有稳定的下载入口。
+#
+# 为什么构建步骤只有一行 `bash ...`：
+#   真正的逻辑在 android/tools/ci-build-apk.sh 里 —— 版本库里的脚本才 review 得动、
+#   本地才复现得了，也避开了 YAML 内联多行 shell 与 Gitee `{参数}` 模板的相互干扰。
+
+version: '1.0'
+name: android-apk
+displayName: 安卓云打包（APK）
+
+triggers:
+  push:
+    branches:
+      precise:
+        - main
+
+stages:
+  - stage:
+      name: build
+      displayName: 构建 APK
+      strategy: naturally
+      trigger: auto
+      steps:
+        - step: build@maven
+          name: build_apk
+          displayName: 装安卓工具链并打包
+          # 构建机默认没装 Android SDK/JDK，这里借 Maven 插件拿一个 JDK 17 的 shell 环境，
+          # 真正的工具链安装与打包交给下面的脚本（CentOS/Debian 两种镜像都能跑）
+          jdkVersion: 17
+          commands:
+            - set -e
+            - bash android/tools/ci-build-apk.sh
+          # 缓存：Gradle 依赖 + 调试签名 + 已装好的 Android SDK。
+          # 首次构建会慢（要下载 SDK 与依赖），之后命中缓存会快很多。
+          caches:
+            - ~/.gradle
+            - ~/.android
+            - ~/android-sdk
+          artifacts:
+            - name: BUILD_ARTIFACT
+              path:
+                - ./android/app/build/outputs/apk/
+            # 算法库单测的报告也收进来：脚本在同一次 Gradle 调用里跑了
+            # :sstv-engine:test，一旦 PSNR 掉出神谕基线，这份 HTML 是唯一能看出
+            # "差在哪个制式、差多少 dB" 的东西，只有控制台日志不够用。
+            - name: TEST_REPORT
+              path:
+                - ./android/sstv-engine/build/reports/tests/test/
+
+  - stage:
+      name: publish
+      displayName: 发布制品
+      strategy: naturally
+      trigger: auto
+      steps:
+        - step: publish@general_artifacts
+          name: publish_apk
+          displayName: 上传 APK 制品
+          dependArtifact: BUILD_ARTIFACT
+          # 制品名只允许字母/数字/下划线/连字符 —— 不能带点号
+          artifactName: sstv-apk

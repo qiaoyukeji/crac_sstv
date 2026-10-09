@@ -43,7 +43,50 @@
     el.className = 'status' + (kind ? ' ' + kind : '');
   }
 
+  // ------------------------------------------------------ 原生桥 / 浮动提示 --
+  // 安卓壳 App 里没有"下载"这回事：WebView 不会为 <a download> + blob: 落地文件，
+  // 也不会触发 DownloadListener（那个只认 http/https）。所以走 JS 桥，把内容转成
+  // base64 交给原生写进"下载/SSTV"。浏览器里 SSTVNative 不存在，这段自动跳过。
+  var nativeBridge = (window.SSTVNative && typeof window.SSTVNative.saveFile === 'function')
+    ? window.SSTVNative
+    : null;
+
+  var toastTimer = null;
+  function toast(msg, kind) {
+    var el = document.getElementById('toast');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.className = 'toast show' + (kind ? ' ' + kind : '');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.className = 'toast'; }, 3600);
+  }
+
+  // 原生写完文件后回调这里（Toast 会被系统折叠，页面里再给一条才看得清）
+  window.__sstvOnSaved = function (name, ok, message) {
+    toast(message || (ok ? '已保存 ' + name : '导出失败'), ok ? 'ok' : 'err');
+  };
+
   function download(blob, filename) {
+    if (nativeBridge) {
+      var fr = new FileReader();
+      fr.onload = function () {
+        var s = String(fr.result || '');
+        var comma = s.indexOf(',');
+        try {
+          nativeBridge.saveFile(
+            filename,
+            blob.type || 'application/octet-stream',
+            comma >= 0 ? s.slice(comma + 1) : s
+          );
+        } catch (e) {
+          toast('导出失败：' + (e && e.message ? e.message : e), 'err');
+        }
+      };
+      fr.onerror = function () { toast('导出失败：无法读取数据', 'err'); };
+      fr.readAsDataURL(blob);
+      return;
+    }
+
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;

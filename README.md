@@ -68,6 +68,15 @@ SSTV（Slow-Scan Television，慢扫描电视）是业余无线电的一项图�
 - 深色主题、键盘可达、44 px 触控目标、`prefers-reduced-motion` 适配
 - 零外部依赖、零字体/JS/CDN 请求
 
+**安卓 App**
+- **WebView 壳 App**（`android/app/`）：把上面这套界面原样装进安卓，产出可直接安装的 APK
+- 复用同一份 JS 引擎，因此功能与 Web 版**完全一致**；构建时从 `web/` 同步，仓库里不存副本
+- 补齐了"浏览器有、WebView 没有"的四件事：**安全上下文**（用 `WebViewAssetLoader`
+  以 https 提供本地资源，麦克风才可用）、**运行时权限**、**文件导入**、**文件导出**
+  （写进系统的 `下载/SSTV/`）
+- **不申请 `INTERNET` 权限** —— 把"100% 离线"从代码承诺升级为系统级事实
+- **Gitee Go 云打包**：推送到 `main` 自动出 APK，本地不需要装 Android Studio
+
 ---
 
 ## 3. 仓库结构
@@ -134,13 +143,33 @@ crac_sstv/
 │   │   └── SSTVEngine.swift       对外门面 API
 │   └── Tests/SSTVEngineTests/     XCTest 自环 + 神谕比对
 │
-└── android/sstv-engine/           【Android 纯 Kotlin JVM 模块】
-    ├── build.gradle.kts / settings.gradle.kts
-    └── src/main/kotlin/com/example/sstv/engine/
-        ├── SSTVCommon.kt, SSTVMode.kt, SSTVVIS.kt, SSTVColor.kt
-        ├── SSTVDSP.kt, SSTVEncode.kt, SSTVDecode.kt
-        ├── SSTVEngine.kt          门面 API
-        └── SSTVEngineCheck.kt     CLI 快速自检入口
+├── .workflow/
+│   └── android-apk.yml            Gitee Go 流水线：云打包 APK
+│
+└── android/                       【Android 端：WebView 壳 App + 纯 Kotlin 引擎】
+    ├── README.md                  壳 App 的取舍，以及四个"浏览器有、WebView 没有"的坑
+    ├── settings.gradle.kts        多模块根工程（:app + :sstv-engine）
+    ├── build.gradle.kts           插件版本统一声明（apply false）
+    ├── gradle.properties          内存与并行策略（CI 求稳，不求快）
+    ├── gradlew / gradlew.bat      Gradle Wrapper（8.7，distributionUrl 指向腾讯镜像）
+    ├── tools/ci-build-apk.sh      云打包入口：装工具链 + 打包（CI 与本地共用同一份）
+    ├── keystore.properties.example  正式签名模板（真实文件已被 git 忽略）
+    │
+    ├── app/                       【WebView 壳 App —— 产出 APK】
+    │   ├── build.gradle.kts       含 syncWebAssets：把 web/ 同步进 assets/www
+    │   └── src/main/
+    │       ├── AndroidManifest.xml        RECORD_AUDIO，刻意不申请 INTERNET
+    │       ├── java/com/qiaoyukeji/sstv/MainActivity.kt
+    │       │                              WebView + 安全上下文 + 权限 + 文件导入导出桥
+    │       └── res/                       矢量图标 + 深色主题（无二进制素材）
+    │
+    └── sstv-engine/               【纯 Kotlin JVM 引擎，不含 Android API】
+        ├── build.gradle.kts
+        └── src/main/kotlin/com/example/sstv/engine/
+            ├── SSTVCommon.kt, SSTVMode.kt, SSTVVIS.kt, SSTVColor.kt
+            ├── SSTVDSP.kt, SSTVEncode.kt, SSTVDecode.kt
+            ├── SSTVEngine.kt          门面 API
+            └── SSTVEngineCheck.kt     CLI 快速自检入口
 ```
 
 ---
@@ -237,18 +266,33 @@ swift test          # 或在 Xcode 中打开 Package.swift
 
 ### 4.4 Android
 
-```bash
-cd android/sstv-engine
-./gradlew test                      # 运行 JUnit 自环校验
+Android 端是一个 **WebView 壳 App**（`android/app/`）：把 `web/` 那份离线前端装进 WebView，
+补齐安全上下文、麦克风权限、文件导入导出这三件事。它复用同一份 JS 引擎，所以功能与 Web 版完全一致；
+详细取舍与踩坑见 **[android/README.md](android/README.md)**。
 
-# 无 Gradle 环境时，也可用 kotlinc 编译后运行引擎自带的命令行自检入口：
-# kotlinc src/main/kotlin -include-runtime -d sstv.jar
-# java -cp sstv.jar com.example.sstv.engine.SSTVEngineCheckKt
+```bash
+# 一条命令：自动装 Android SDK 并打包（需要 JDK 17，其余脚本自己搞定）
+export JAVA_HOME=/path/to/jdk-17
+bash android/tools/ci-build-apk.sh
+
+# 产物
+#   android/app/build/outputs/apk/debug/app-debug.apk
+#   android/app/build/outputs/apk/release/app-release.apk
+
+# 只跑算法库的 JUnit 自环校验（纯 JVM，不需要 Android SDK）
+cd android && ./gradlew :sstv-engine:test
 ```
 
-- 引擎为**纯 JVM Kotlin**，不依赖 Android SDK，桌面 JVM 也能运行
-- Android 端只需 `implementation(project(":sstv-engine"))`
-- ⚠️ 当前尚未包含 Compose App 模块（`Phase 3b`）
+**云打包（Gitee Go）**：推送到 Gitee 的 `main` 分支会自动触发
+[`.workflow/android-apk.yml`](.workflow/android-apk.yml)，在云构建机上装好工具链并产出 APK；
+也可以在仓库页「Gitee Go → 流水线」手动点「运行」。构建机会缓存 `~/.gradle`、`~/.android`
+与已装好的 Android SDK，**首次慢、之后快**。首次使用需在 Gitee 仓库页手动开通 Gitee Go。
+
+- 壳 App 的**唯一前端真源仍是 `web/`**：构建时由 `app/build.gradle.kts` 的 `syncWebAssets`
+  任务同步进 `assets/www`，仓库里不存副本（存副本一定会漂移）
+- `android/sstv-engine/` 是**纯 Kotlin JVM** 算法库，不依赖 Android SDK，桌面 JVM 也能运行；
+  壳 App 当前不依赖它，留作将来写原生界面的地基
+- ⚠️ 原生 Compose 界面（`Phase 3b`）仍未开始 —— 当前壳 App 走的是 WebView 路线
 
 ---
 
@@ -613,14 +657,20 @@ Phase 1 期间定位并修复了 6 个算法缺陷，后续修复第 7、8 项�
 5. **麦克风需要安全上下文**：只有 `https://`（证书受信任）或 `localhost` / `127.0.0.1` 才可用。**`http://` + 局域网 IP 不可用** —— 浏览器会把 `navigator.mediaDevices` 直接置为 `undefined`。局域网场景的完整解决方案见 **[web/HTTPS_MIC_GUIDE.md](web/HTTPS_MIC_GUIDE.md)**（`web/serve.py` + `web/tools/gen_cert.py` 已内置支持）。
 6. **实时成像仍受主线程牵制**：录音回调里每 ~186 ms 要跑一次 8k 点 FFT（约 1 ms）与增量绘制；低端手机上如果同时进行其它重绘制，可能出现丢块。此时关掉 `实时逐行成像` 开关即可回到纯批处理。
 7. **单声道**：只取第一个声道；立体声文件时另一声道被忽略。
-8. **未完成**：iOS 的 SwiftUI App target、Android 的 Compose App 模块尚未纳入本仓库（见 §10）。
+8. **未完成**：iOS 的 SwiftUI App target、Android 的**原生 Compose 界面**尚未纳入本仓库（见 §10）。
+   Android 侧的**可安装 APK 已经有了** —— 走的是 WebView 壳路线（`android/app/`），
+   复用 Web 版引擎；它自己的限制（WebView 版本差异、后台录音、base64 桥的内存开销）
+   列在 [android/README.md](android/README.md) 的「已知限制」里。
 
 ---
 
 ## 10. 路线图
 
+- [x] **Android WebView 壳 App** —— 复用 `web/` 前端，补齐安全上下文 / 麦克风权限 /
+      文件导入导出，Gitee Go 云打包出 APK（见 §4.4 与 [android/README.md](android/README.md)）
 - [ ] **Phase 3a** — iOS SwiftUI App（AVFoundation 麦克风实时 RX / 文件导入；播放 + 导出 WAV/M4A）
-- [ ] **Phase 3b** — Android Compose App（AudioRecord / AudioTrack / MediaExtractor + MediaMuxer）
+- [ ] **Phase 3b** — Android **原生** Compose App（AudioRecord / AudioTrack / MediaExtractor + MediaMuxer）；
+      地基是现成的 `android/sstv-engine/`，用于替换掉 WebView 以换取性能
 - [ ] **更多制式** — Robot 72；PD120/160/180/240/290；Martin M3/M4；Scottie DX；Wraase SC2-180
 - [ ] **解码增强** — AFC、逐行重新同步、倾斜校正（slant correction）
 - [ ] **实时瀑布图 / 频谱显示**（基于 AnalyserNode）

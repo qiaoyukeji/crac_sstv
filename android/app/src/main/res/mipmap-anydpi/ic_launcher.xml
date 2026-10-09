@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 7.x（API 24–25）回退图标。
+  这两版没有自适应图标，所以背景要自己画 —— 用圆角矩形而不是正方形，
+  否则在某些启动器上会是一个突兀的黑方块。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#0A0F15"
+        android:pathData="M32,8 L76,8 A24,24 0 0 1 100,32 L100,76 A24,24 0 0 1 76,100 L32,100 A24,24 0 0 1 8,76 L8,32 A24,24 0 0 1 32,8 Z" />
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M32,41 L76,41 L76,48 L32,48 Z" />
+    <path
+        android:fillColor="#E6FFFB"
+        android:pathData="M32,53 L76,53 L76,60 L32,60 Z" />
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M32,65 L58,65 L58,72 L32,72 Z" />
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M78,34 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+</vector>

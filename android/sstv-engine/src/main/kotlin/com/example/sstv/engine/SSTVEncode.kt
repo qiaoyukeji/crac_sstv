@@ -6,8 +6,13 @@ import kotlin.math.round
 object SSTVEncode {
 
     fun encode(image: SSTVImage, mode: SSTVMode, sr: Int = 44100): FloatArray {
-        val w = image.width
-        val h = image.height
+        // 尺寸一律以**制式**为准，不能用 image.width/height。
+        // 参考实现（web/sstv-engine.js 的 encodeImage）就是 mode.width / mode.height：
+        // 图像比制式大时只取左上角区域，比制式小时越界处按 0 处理（下面已 coerce）。
+        // 这里曾经用 image 的尺寸，导致"传 320x256 图、编 Robot36(320x240)"时会多编 16 行
+        // —— 信号长度比标准多出 105824 个采样，接收端自然对不上。
+        val w = mode.width
+        val h = mode.height
         val ycbcr = SSTVColor.rgbToYCbCr(image.rgb, w, h)
 
         val segs = SSTVVIS.segments(mode.vis).toMutableList()

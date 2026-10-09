@@ -31,9 +31,12 @@ object SSTVColor {
             val r = rgb[i * 3].toFloat()
             val g = rgb[i * 3 + 1].toFloat()
             val b = rgb[i * 3 + 2].toFloat()
-            val y = 0.299 * r + 0.587 * g + 0.114 * b
-            val cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 128
-            val cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 128
+            // 字面量必须带 f 后缀：Swift 会把 0.299 按操作数类型推断成 Float，
+            // Kotlin 不会 —— 不带后缀就是 Double，混算会让 round() 的结果变 Double，
+            // 后面的 coerceIn(0f, 255f) 直接类型不符。语义要与 Swift 版保持一致（全程 Float）。
+            val y = 0.299f * r + 0.587f * g + 0.114f * b
+            val cb = -0.168736f * r - 0.331264f * g + 0.5f * b + 128f
+            val cr = 0.5f * r - 0.418688f * g - 0.081312f * b + 128f
             out[i * 3] = round(y).coerceIn(0f, 255f)
             out[i * 3 + 1] = round(cb).coerceIn(0f, 255f)
             out[i * 3 + 2] = round(cr).coerceIn(0f, 255f)
@@ -46,11 +49,11 @@ object SSTVColor {
         val out = IntArray(w * h * 3)
         for (i in 0 until w * h) {
             val y = ycbcr[i * 3]
-            val cb = ycbcr[i * 3 + 1] - 128
-            val cr = ycbcr[i * 3 + 2] - 128
-            val r = y + 1.402 * cr
-            val g = y - 0.344136 * cb - 0.714136 * cr
-            val b = y + 1.772 * cb
+            val cb = ycbcr[i * 3 + 1] - 128f
+            val cr = ycbcr[i * 3 + 2] - 128f
+            val r = y + 1.402f * cr
+            val g = y - 0.344136f * cb - 0.714136f * cr
+            val b = y + 1.772f * cb
             out[i * 3] = round(r).toInt().coerceIn(0, 255)
             out[i * 3 + 1] = round(g).toInt().coerceIn(0, 255)
             out[i * 3 + 2] = round(b).toInt().coerceIn(0, 255)

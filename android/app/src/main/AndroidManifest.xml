@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CRAC SSTV · WebView 壳 App
+
+  权限说明（只申请真正用到的，且不申请 INTERNET）：
+    · RECORD_AUDIO   —— 麦克风接收 SSTV 音频，这是 App 的核心功能之一
+    · MODIFY_AUDIO_SETTINGS —— 部分机型上 AudioContext 需要它才能正常采集
+    · WRITE_EXTERNAL_STORAGE —— 仅 Android 9 及以下需要，用于把导出的 PNG/WAV
+      写进"下载/SSTV"目录；Android 10 起改用 MediaStore，不再需要这个权限
+
+  为什么不申请 INTERNET：
+    本应用 100% 离线（输出全部本地计算，不发任何网络请求）。不申请 INTERNET
+    是把这个承诺固化成系统级事实 —— 就算代码里出了漏洞，系统也不允许它联网。
+    本地页面通过 WebViewAssetLoader 以 https://appassets.androidplatform.net/
+    提供，由 shouldInterceptRequest 就地拦截，全程不经过网络栈。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+
+    <application
+        android:allowBackup="true"
+        android:hardwareAccelerated="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/Theme.SSTV">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

@@ -1,0 +1,22 @@
+# 跨平台仓库（Python / Web / iOS / Android），行尾必须按文件类型钉死。
+# 不写这一条的话，在 core.autocrlf=true 的 Windows 上检出时 gradlew 会变成 CRLF，
+# 而 Linux/CI 执行它时会直接以 "bad interpreter: /bin/sh^M" 失败 —— 这类问题
+# 本地不报错、只在 CI 上炸，最难查。
+
+# Gradle Wrapper：Linux/macOS 用 sh 脚本，Windows 用 .bat
+android/gradlew        text eol=lf
+android/gradlew.bat    text eol=crlf
+
+# 通用规则
+*.sh                   text eol=lf
+*.bat                  text eol=crlf
+*.cmd                  text eol=crlf
+
+# 二进制，别碰
+*.jar  binary
+*.apk  binary
+*.jks  binary
+*.keystore binary
+*.png  binary
+*.jpg  binary
+*.wav  binary

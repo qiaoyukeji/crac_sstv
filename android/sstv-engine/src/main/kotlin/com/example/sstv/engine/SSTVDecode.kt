@@ -17,8 +17,14 @@ object SSTVDecode {
         } else {
             val (v, _) = SSTVVIS.decode(freq, sr)
             vis = v
-            val m = if (v != null) SSTVMode.byVis(v) else null
-                ?: return SSTVDecodeResult(SSTVImage(0, 0, intArrayOf()), mapOf("vis" to (null as Any?), "mode" to "", "lines" to 0))
+            // 括号不能省：`if (c) a else b ?: return` 会被解析成 `if (c) a else (b ?: return)`，
+            // 也就是"else 分支必然返回"，整个 if 的类型就退化成了 `SSTVMode?`，
+            // 赋给非空变量直接报错，还会把后续所有 `round()` 级联成"未解析引用"。
+            val m = (if (v != null) SSTVMode.byVis(v) else null)
+                ?: return SSTVDecodeResult(
+                    SSTVImage(0, 0, intArrayOf()),
+                    mapOf("vis" to (null as Any?), "mode" to "", "lines" to 0)
+                )
             mode = m
         }
 
@@ -33,8 +39,17 @@ object SSTVDecode {
         for (i in 0 until nLines) {
             val lo = maxOf(0, (pos - 0.15 * step).toInt())
             val hi = minOf(freq.size, (pos + 0.5 * step).toInt())
-            val s = findSync(freq, lo, hi, sr, mode.syncDurS)
-            if (s == null) break
+            var s = findSync(freq, lo, hi, sr, mode.syncDurS)
+            if (s == null) {
+                // 正常窗口（半个行周期）里没找到同步脉冲：说明这一行被中断/干扰吃掉了。
+                // 把窗口放宽到 1.5 个行周期再找一次，跳过这一行继续往下解。
+                // 参考实现（web/sstv-engine.js）里加这一步的原因：原来的实现是直接 break，
+                // 一处几毫秒的干扰就会让整幅图从中间被截断（麦克风录音实测只能解出 138/240 行）。
+                // 放宽搜索只在"本来就找不到"时触发，干净信号的同步必然落在窄窗口内，
+                // 因此对已有结果与验证数据没有任何影响。
+                s = findSync(freq, lo, minOf(freq.size, (pos + 1.5 * step).toInt()), sr, mode.syncDurS)
+            }
+            if (s == null) break            // 连续一行都找不到才真的放弃
             syncStarts.add(s)
             pos = s + step
         }
@@ -45,11 +60,11 @@ object SSTVDecode {
         for ((idx, s) in syncStarts.withIndex()) {
             val lineIndex = if (mode.kind == "pd") 2 * idx else idx
             val r = mode.line(lineIndex) ?: continue
-            var p = s + (mode.syncDurS * sr.toDouble()).round().toInt()
+            var p = s + round(mode.syncDurS * sr.toDouble()).toInt()
             var pxIdx = 0
             for (seg in r.segments) {
                 when (seg) {
-                    is SSTVSegment.Tone -> p += (seg.duration * sr.toDouble()).round().toInt()
+                    is SSTVSegment.Tone -> p += round(seg.duration * sr.toDouble()).toInt()
                     is SSTVSegment.Pixels -> {
                         val (vals, newPos) = readPx(freq, p, seg.count, seg.duration, sr)
                         p = newPos
@@ -128,9 +143,14 @@ object SSTVDecode {
         return startBitPos + 10 * cell
     }
 
-    private fun findSync(freq: FloatArray, lo: Int, hi: Int, sr: Int, syncDur: Float): Int? {
-        val lo = maxOf(0, lo)
-        val hi = minOf(freq.size, hi)
+    private fun findSync(freq: FloatArray, loIn: Int, hiIn: Int, sr: Int, syncDur: Float): Int? {
+        val lo = maxOf(0, loIn)
+        val hi = minOf(freq.size, hiIn)
+        // hi <= lo 是完全可能的：录音在"一帧还没走完"时结束，上一行 sync 之后 pos 会越过
+        // 信号末尾，下一轮搜索窗口整个落到音频之外。此时长度为负，BooleanArray(负数) 会抛
+        // IllegalArgumentException（参考实现里则是 "Invalid typed array length"，实测 -1255）。
+        // 语义上这就是"没有可搜的区间"，直接返回 null。
+        if (hi <= lo) return null
         val near = BooleanArray(hi - lo) { kotlin.math.abs(freq[lo + it] - SSTVCalibration.SYNC_HZ) < 120 }
         val minLen = (0.6 * syncDur * sr.toDouble()).toInt()
         val runs = findRuns(near, minLen)
@@ -139,17 +159,22 @@ object SSTVDecode {
     }
 
     private fun readPx(freq: FloatArray, pos: Int, npx: Int, dur: Float, sr: Int): Pair<FloatArray, Int> {
-        val tot = (dur * sr.toDouble()).round().toInt()
+        val tot = round(dur * sr.toDouble()).toInt()
         val out = FloatArray(npx)
-        var p = pos
+        val p = pos
         for (i in 0 until npx) {
-            val a = p + (i.toDouble() * tot.toDouble() / npx.toDouble()).round().toInt()
-            val b = p + ((i + 1).toDouble() * tot.toDouble() / npx.toDouble()).round().toInt()
+            val a = p + round(i.toDouble() * tot.toDouble() / npx.toDouble()).toInt()
+            val b = p + round((i + 1).toDouble() * tot.toDouble() / npx.toDouble()).toInt()
             var bb = b
             if (bb <= a) bb = a + 1
             val bb2 = minOf(bb, freq.size)
+            // 必须把中值**频率**换算回 0..255 的灰度值再交给上层。
+            // 参考实现 web/sstv-engine.js 的 readPx 返回的是 valueOfFreq(median)，
+            // 不是频率本身；这里曾经直接返回频率（约 1500–2300），上层当灰度用、
+            // 最后 coerceIn(0,255) 全被压成 255，整幅图退化为纯白 —— M1 回环 PSNR
+            // 掉到 4.9 dB（正常应 ~35.7 dB）就是这么来的。
             out[i] = if (a >= 0 && a < freq.size && bb2 > a) {
-                sstvMedian(freq.copyOfRange(a, bb2))
+                SSTVCalibration.valueOf(sstvMedian(freq.copyOfRange(a, bb2))).toFloat()
             } else 0.0f
         }
         return out to (p + tot)
