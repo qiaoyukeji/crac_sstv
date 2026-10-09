@@ -132,6 +132,66 @@
   var txAudio = null;                                // Float32Array
   var playCtx = null, playSrc = null;
 
+  // ------------------------------------------------- 发送进度遮罩（TX） ----
+  // 播放音频就是"发射"。单靠一个按钮变红，发送者无法知道进行到哪了，尤其是
+  // Martin M1 要 115 s、PD90 要 91 s。这里在图片上叠一层遮罩：
+  //   已发送的部分保持清晰 / 未发送的部分压暗 / 中间一条扫描线 + 百分比和计时。
+  // 选择"从上往下推进"而不是普通进度条，是因为它与接收端逐行成像的过程一致 ——
+  // 发送者看到的画面正是对端正在收到的画面。
+  var txStage = $('#tx-stage');
+  var txSend = $('#tx-send');
+  var txSendMask = $('#tx-send-mask');
+  var txSendLine = $('#tx-send-line');
+  var txSendChip = $('#tx-send-chip');
+  var txRaf = 0;
+
+  function fmtClock(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    return String(Math.floor(sec / 60)).padStart(2, '0') + ':' +
+           String(sec % 60).padStart(2, '0');
+  }
+
+  function setSendProgress(pct, chip) {
+    pct = Math.max(0, Math.min(100, pct));
+    txSendMask.style.height = (100 - pct) + '%';
+    txSendLine.style.top = pct + '%';
+    if (chip != null) txSendChip.textContent = chip;
+    txSend.setAttribute('aria-valuenow', String(Math.round(pct)));
+  }
+
+  function beginSendOverlay() {
+    txSend.classList.remove('hidden');
+    txStage.classList.add('sending');
+    setSendProgress(0, '准备发送…');
+  }
+
+  function endSendOverlay() {
+    if (txRaf) { cancelAnimationFrame(txRaf); txRaf = 0; }
+    txSend.classList.add('hidden');
+    txStage.classList.remove('sending');
+    setSendProgress(0, '');
+  }
+
+  function tickSend() {
+    if (!playSrc || !playCtx || !txAudio) { txRaf = 0; return; }
+    var dur = txAudio.length / SR;
+    var t = playCtx.currentTime;
+    var pct = dur > 0 ? (t / dur) * 100 : 0;
+    setSendProgress(pct, '● 正在发送 ' + Math.round(Math.min(100, Math.max(0, pct))) + '%  ·  ' +
+                          fmtClock(t) + ' / ' + fmtClock(dur));
+    txRaf = requestAnimationFrame(tickSend);
+  }
+
+  /** 停止播放并收起遮罩。可重复调用。 */
+  function stopPlayback() {
+    if (playSrc) { try { playSrc.stop(); } catch (e) { /* already stopped */ } }
+    if (playCtx) { try { playCtx.close(); } catch (e) { /* already closed */ } }
+    playSrc = null;
+    playCtx = null;
+    endSendOverlay();
+    resetPlayButton();
+  }
+
   // populate mode selector
   var txModeSel = $('#tx-mode');
   SSTV.V1_MODES.forEach(function (m, i) {
@@ -151,23 +211,101 @@
   }
   txModeSel.addEventListener('change', refreshModeInfo);
 
-  /** "cover" fit: fill the frame, crop the overflow. */
-  function drawCover(ctx, img, w, h) {
-    var ir = img.width / img.height, tr = w / h, sw, sh, sx, sy;
-    if (ir > tr) { sh = img.height; sw = img.height * tr; sx = (img.width - sw) / 2; sy = 0; }
-    else { sw = img.width; sh = img.width / tr; sx = 0; sy = (img.height - sh) / 2; }
-    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+  // ------------------------------------------------------- 画面适配 fit ----
+  // 为什么需要这块：SSTV 每种制式的画布尺寸是**固定**的（如 Martin M1 = 320×256，
+  // 即 5:4），而手机照片多为 4:3 / 3:4。两者比例不一致时，把原图"塞进去"必然要
+  // 做取舍 —— 要么补黑边、要么裁掉一部分、要么拉伸变形。原实现固定用 CSS `cover`
+  // 语义（填满画布 + 裁掉溢出），于是竖构图照片就被切掉了上下。现在把选择权交给
+  // 用户，并且明确写出"会发生什么"。
+  //
+  //   contain —— 完整保留，比例不足处补黑边（默认，不丢内容）
+  //   cover   —— 填满画布，裁掉溢出部分（会丢内容）
+  //   stretch —— 直接铺满，比例不一致时画面变形
+  function fmtRatio(r) {
+    var common = [[1, 1], [4, 3], [3, 4], [3, 2], [2, 3], [16, 9], [9, 16],
+                  [5, 4], [4, 5], [7, 5], [5, 7], [16, 10], [10, 16]];
+    for (var i = 0; i < common.length; i++) {
+      if (Math.abs(common[i][0] / common[i][1] - r) < 0.013) {
+        return common[i][0] + ':' + common[i][1];
+      }
+    }
+    return (Math.round(r * 100) / 100) + ':1';
   }
+
+  /** iw×ih 的图放进 w×h 画布的落点（直接喂给 drawImage）。 */
+  function fitRect(iw, ih, w, h, mode) {
+    if (mode === 'stretch') return { dx: 0, dy: 0, dw: w, dh: h };
+    var s = (mode === 'cover') ? Math.max(w / iw, h / ih) : Math.min(w / iw, h / ih);
+    var dw = iw * s, dh = ih * s;
+    return { dx: (w - dw) / 2, dy: (h - dh) / 2, dw: dw, dh: dh };
+  }
+
+  function pctStr(x) { return (Math.round(x * 1000) / 10) + '%'; }
+
+  /** 一句话说清"这张图放进这个制式会怎样"。 */
+  function describeFit(iw, ih, w, h, mode) {
+    var ir = iw / ih, tr = w / h;
+    var same = Math.abs(ir - tr) < 0.013;
+    var head = '原图 ' + iw + '×' + ih + '（' + fmtRatio(ir) + '）→ 画布 ' +
+               w + '×' + h + '（' + fmtRatio(tr) + '）：';
+    if (same) return head + '比例一致，完整铺满' +
+      (mode === 'cover' ? '，无裁剪' : (mode === 'stretch' ? '，不变形' : '，无黑边'));
+
+    if (mode === 'stretch') {
+      var k = (w / iw) / (h / ih);          // 相对横向拉伸系数
+      return head + (k > 1
+        ? '水平拉伸 ' + (Math.round(k * 100) / 100) + '×，画面会变形'
+        : '垂直拉伸 ' + (Math.round(100 / k) / 100) + '×，画面会变形');
+    }
+    if (mode === 'cover') {
+      return head + (ir > tr
+        ? '原图更宽 → 裁掉左右共 ' + pctStr(1 - tr / ir)
+        : '原图更高 → 裁掉上下共 ' + pctStr(1 - ir / tr));
+    }
+    return head + (ir > tr
+      ? '完整保留 → 上下补黑边共占 ' + pctStr(1 - tr / ir)
+      : '完整保留 → 左右补黑边共占 ' + pctStr(1 - ir / tr));
+  }
+
+  /** 是否"有代价"：cover 会丢内容，stretch 会变形。contain 补黑边不算代价。 */
+  function fitHasCost(iw, ih, w, h, mode) {
+    if (Math.abs(iw / ih - w / h) < 0.013) return false;
+    return mode === 'cover' || mode === 'stretch';
+  }
+
+  /** 按适配方式绘制到画布（contain 先铺黑底形成信箱式黑边）。 */
+  function drawFitted(ctx, img, w, h, mode) {
+    var r = fitRect(img.width, img.height, w, h, mode);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, img.width, img.height, r.dx, r.dy, r.dw, r.dh);
+  }
+
+  var txFitSel = $('#tx-fit');
+
+  function refreshFitNote() {
+    var note = $('#tx-fit-note');
+    if (!txImage) { note.textContent = ''; note.classList.remove('warn'); return; }
+    var mode = txFitSel.value;
+    note.textContent = describeFit(txImage.width, txImage.height,
+                                   txMode.width, txMode.height, mode);
+    note.classList.toggle('warn', fitHasCost(txImage.width, txImage.height,
+                                             txMode.width, txMode.height, mode));
+  }
+
+  txFitSel.addEventListener('change', function () {
+    if (txImage) renderSource(); else refreshFitNote();
+  });
 
   /** Render the source image at exactly the mode resolution. */
   function renderSource() {
     txMode = currentMode();
+    stopPlayback();                                  // 源图变了，旧音频作废
+
     txCanvas.width = txMode.width;
     txCanvas.height = txMode.height;
     var g = txCanvas.getContext('2d');
-    g.fillStyle = '#000';
-    g.fillRect(0, 0, txMode.width, txMode.height);
-    drawCover(g, txImage, txMode.width, txMode.height);
+    drawFitted(g, txImage, txMode.width, txMode.height, txFitSel.value);
 
     var data = g.getImageData(0, 0, txMode.width, txMode.height).data;
     var n = txMode.width * txMode.height;
@@ -178,7 +316,7 @@
       txRGB[i * 3 + 2] = data[i * 4 + 2];
     }
 
-    // preview
+    // preview（显示的就是真正会被编码的那张位图，黑边/裁剪一目了然）
     var pv = $('#tx-preview');
     pv.width = txMode.width;
     pv.height = txMode.height;
@@ -186,6 +324,8 @@
     var pg = pv.getContext('2d');
     pg.imageSmoothingEnabled = false;
     pg.drawImage(txCanvas, 0, 0);
+
+    refreshFitNote();
 
     txAudio = null;
     $('#tx-play').disabled = true;
@@ -275,6 +415,7 @@
   // ------------------------------------------------------------- encode --
   $('#tx-gen').addEventListener('click', function () {
     if (!txRGB) { setStatus($('#tx-status'), '请先载入或生成一张图片', 'err'); return; }
+    stopPlayback();                                  // 旧音频即将作废，先停掉
     busyJob('正在合成 SSTV 音频…', function () {
       var t0 = performance.now();
       txAudio = SSTV.encodeImage(txMode, txRGB, SR);
@@ -292,19 +433,13 @@
   // ------------------------------------------------------------ playback --
   function resetPlayButton() {
     var b = $('#tx-play');
-    b.textContent = '▶ 试听';
+    b.textContent = '▶ 发送';
     b.classList.remove('danger');
-    playSrc = null;
   }
 
   $('#tx-play').addEventListener('click', function () {
     var btn = $('#tx-play');
-    if (playSrc) {                                   // stop
-      try { playSrc.stop(); } catch (e) { /* already stopped */ }
-      resetPlayButton();
-      if (playCtx) { playCtx.close(); playCtx = null; }
-      return;
-    }
+    if (playSrc) { stopPlayback(); return; }         // stop
     if (!txAudio) return;
     try {
       playCtx = newAudioCtx();
@@ -313,16 +448,15 @@
       playSrc = playCtx.createBufferSource();
       playSrc.buffer = buf;
       playSrc.connect(playCtx.destination);
-      playSrc.onended = function () {
-        resetPlayButton();
-        if (playCtx) { playCtx.close(); playCtx = null; }
-      };
+      playSrc.onended = function () { stopPlayback(); };
       playSrc.start(0);
-      btn.textContent = '■ 停止';
+      btn.textContent = '■ 停止发送';
       btn.classList.add('danger');
+      beginSendOverlay();
+      txRaf = requestAnimationFrame(tickSend);
     } catch (err) {
       setStatus($('#tx-status'), '播放失败：' + err.message, 'err');
-      if (playCtx) { playCtx.close(); playCtx = null; }
+      stopPlayback();
     }
   });
 
@@ -371,11 +505,13 @@
       });
       $('#rx-file').classList.toggle('hidden', rxSource !== 'file');
       $('#rx-mic').classList.toggle('hidden', rxSource !== 'mic');
+      if (rxSource === 'mic') refreshMicDiag();     // 切进来就立刻告知能否录音
     });
   });
 
   function armRxDecode(samples, label) {
     rxSamples = samples;
+    liveImg = null; liveRgb = null; liveRows = 0; liveW = 0; liveH = 0;  // 旧画布作废
     $('#rx-decode').disabled = !samples || samples.length < SR * 0.5;
     $('#rx-png').disabled = true;
     if (samples) {
@@ -411,19 +547,315 @@
   var recCtx = null, recStream = null, recProc = null, recSink = null;
   var recChunks = null, recLen = 0, recTimer = null, recStart = 0;
 
+  // ---- microphone environment probing -------------------------------------
+  // 关键事实：getUserMedia 只在"安全上下文（secure context）"下被暴露。
+  // http:// + 局域网 IP 属于非安全来源，浏览器会直接把 navigator.mediaDevices
+  // 置为 undefined —— 这极易被误读成"浏览器不支持麦克风"。下面把这几种情形
+  // 严格区分开，并给出针对当前平台的可执行修复路径。
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function isLoopbackHost(h) {
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+  }
+
+  function platformKind() {
+    var ua = navigator.userAgent || '';
+    var iOS = /iPad|iPhone|iPod/.test(ua) ||
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (iOS) return 'ios';
+    if (/Android/.test(ua)) return 'android';
+    return 'desktop';
+  }
+
+  // 返回 null 表示"应当可以录音"，否则返回结构化诊断。
+  // 纯同步、无副作用，页面加载时即可安全调用。
+  function probeMic() {
+    var proto = location.protocol, host = location.hostname, origin = location.origin;
+    var secure = window.isSecureContext === true || proto === 'https:' || isLoopbackHost(host);
+
+    if (!secure) {
+      var fixes = [], plat = platformKind();
+      if (plat === 'android') {
+        fixes.push('免装证书：在手机 Chrome 中把 ' + origin +
+                   ' 加入「将不安全来源视为安全」白名单后重启浏览器（见指南）');
+        fixes.push('推荐做法：安装本项目自签根证书，改用 https 访问（见 web/HTTPS_MIC_GUIDE.md）');
+      } else if (plat === 'ios') {
+        fixes.push('安装本项目根证书描述文件，并在「设置 → 通用 → 关于本机 → 证书信任设置」' +
+                   '中对该根证书开启完全信任，再用 https 访问（见 web/HTTPS_MIC_GUIDE.md）');
+      } else {
+        fixes.push('改用 https 访问，或在本机用 localhost 打开（file:// 同样不可用）');
+      }
+      fixes.push('通用兜底：用手机自带录音机录下电台音频，回到「文件」标签导入解码');
+      return {
+        kind: 'insecure',
+        msg: '当前页面不是安全上下文，浏览器已主动隐藏麦克风接口',
+        detail: '访问地址为 ' + esc(origin) + '（' + esc(proto) + '）。Web 规范要求 ' +
+                'getUserMedia 仅在 https:// 或 localhost 下暴露，因此此处 navigator.mediaDevices ' +
+                '为 undefined。这并不代表浏览器没有录音能力，而是安全策略的强制限制。',
+        fixes: fixes
+      };
+    }
+
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+      return {
+        kind: 'no-api',
+        msg: '浏览器未提供麦克风接口（安全上下文正常）',
+        detail: '当前已是安全上下文，但 navigator.mediaDevices.getUserMedia 仍不存在，' +
+                '通常意味着浏览器内核过旧，或页面被嵌套在不允许麦克风的 iframe 中。',
+        fixes: ['升级浏览器到较新的版本',
+                '若页面被 iframe 嵌套，需为该 iframe 添加 allow="microphone"']
+      };
+    }
+    return null;
+  }
+
+  // getUserMedia 的标准错误名 → 人话。移动端最容易踩 NotAllowedError / NotReadableError。
+  function describeGumError(err) {
+    var n = (err && err.name) || '';
+    var table = {
+      NotAllowedError: ['麦克风权限被拒绝',
+        '用户或浏览器策略拒绝了本次请求。若此前误点了「阻止」，需在站点权限中改回「允许」并刷新页面。',
+        ['点击地址栏左侧的站点信息，把「麦克风」权限改为允许，然后刷新页面',
+         'iOS：设置 → Safari浏览器 → 麦克风 → 允许',
+         '确认系统隐私设置没有全局禁止浏览器访问麦克风']],
+      NotFoundError: ['未检测到可用的麦克风设备',
+        '系统没有报告任何音频输入设备。',
+        ['确认设备自带麦克风或已连接外接麦克风',
+         '检查系统声音设置中是否禁用了输入设备']],
+      NotReadableError: ['麦克风被其它程序占用',
+        '设备存在但无法打开，通常已被其它应用或标签页独占（移动端最常见）。',
+        ['关闭其它正在录音的应用或标签页后重试',
+         '若正在进行通话/语音会议，请先挂断']],
+      OverconstrainedError: ['设备不接受所请求的音频参数',
+        '请求中要求关闭回声消除／降噪／自动增益，当前设备不予支持。重试时会自动放宽约束。',
+        ['直接再点一次「开始录音」即可，会自动以宽松参数重试']],
+      SecurityError: ['安全策略阻止了麦克风访问',
+        '当前页面来源被浏览器判定为不可信。',
+        ['改用 https 或 localhost 访问']],
+      AbortError: ['录音启动被中断',
+        '系统或硬件在启动过程中中止了请求。',
+        ['稍后重试；必要时重启浏览器']]
+    };
+    // 历史别名
+    table.PermissionDeniedError = table.NotAllowedError;
+    table.DevicesNotFoundError = table.NotFoundError;
+    table.TrackStartError = table.NotReadableError;
+
+    var e = table[n];
+    if (e) return { kind: n, msg: e[0], detail: e[1], fixes: e[2] };
+    return {
+      kind: n || 'unknown',
+      // 未归档的错误名要原样带到标题里，否则用户无法检索
+      msg: '录音启动失败（' + (n || '未归类错误') + '）',
+      detail: '浏览器返回：' + esc((err && err.message) || '(无描述)') +
+              '。该错误名不在本工具的知识库中，建议在浏览器控制台查看完整堆栈。',
+      fixes: ['重试一次；若持续失败，请在浏览器控制台查看详细堆栈']
+    };
+  }
+
+  // -------------------------------------------- 实时逐行成像（Live RX） ----
+  // 用户诉求：用麦克风接收时，要能像发送时那样，看着画面一行一行长出来。
+  //
+  // 关键取舍：不做"先整段解完、再按时间轴播放逐行动画"——那是纯装饰，还要求
+  // 用户先等完整段信号；这里真的**边收边解**，录音回调每来一块音频就喂进
+  // SSTV.createStreamDecoder，解调器增量更新频率轨迹，某一行所需的样本一到齐
+  // 就立刻解码并把这若干行增量画上画布。所以屏幕正在出现的那一行，就是电台
+  // 此刻正在发的那一行。
+  //
+  // SSTV 之所以能这样增量：每一行都由「同步脉冲 + 若干色带」自包含组成，行与
+  // 行之间不互相依赖（唯 Robot 36 的色度要借相邻行，引擎里已处理）。
+  var liveDec = null;       // 流式解码器实例
+  var liveRgb = null;       // 引擎输出的 RGB 缓冲（与解码器共用同一块内存）
+  var liveImg = null;       // 持久化的 ImageData，只更新新增行
+  var liveRows = 0;         // 已经画上画布的行数
+  var liveW = 0, liveH = 0;
+  var liveT0 = 0;
+
+  function liveCapable() { return typeof SSTV.createStreamDecoder === 'function'; }
+
+  /** 新一幅画面开始时铺"待机底"：暗底 + 细横线。 */
+  function liveInitCanvas(w, h) {
+    var pv = $('#rx-preview');
+    pv.width = w; pv.height = h;
+    pv.style.aspectRatio = w + ' / ' + h;
+    var g = pv.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    // 未收到的区域必须和非黑的像素有区别 —— 否则收到黑色像素与"还没收到"
+    // 在屏幕上完全一样，逐行生长的过程就看不出来了。
+    g.fillStyle = '#0a0f15';
+    g.fillRect(0, 0, w, h);
+    g.strokeStyle = 'rgba(56, 189, 248, .09)';
+    g.lineWidth = 1;
+    for (var y = 16; y < h; y += 16) {
+      g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(w, y + 0.5); g.stroke();
+    }
+    liveImg = g.getImageData(0, 0, w, h);
+    liveRgb = liveDec.image();          // 引擎的 RGB 缓冲（3 字节/像素）
+    liveW = w; liveH = h; liveRows = 0;
+  }
+
+  /** 只把 [from, to) 行涂进画布：O(新增像素)，与总进度无关。 */
+  function livePaintRows(from, to) {
+    if (!liveImg || !liveRgb) return;
+    if (from < 0) from = 0;
+    if (to > liveH) to = liveH;
+    if (to <= from) return;
+    var d = liveImg.data, s = liveRgb, W = liveW;
+    for (var y = from; y < to; y++) {
+      var a = y * W * 3, o = y * W * 4;
+      for (var x = 0; x < W; x++) {
+        d[o] = s[a]; d[o + 1] = s[a + 1]; d[o + 2] = s[a + 2]; d[o + 3] = 255;
+        a += 3; o += 4;
+      }
+    }
+    $('#rx-preview').getContext('2d')
+      .putImageData(liveImg, 0, 0, 0, from, W, to - from);
+  }
+
+  function liveShowProgress(st) {
+    var chip = $('#rx-live-chip'), note = $('#rx-live-note');
+    var t = (Date.now() - liveT0) / 1000;
+    if (!st.width) {
+      chip.textContent = '等待 VIS 头…  ' + fmtClock(t);
+      note.textContent = '实时解调 @ ' + st.sr + ' Hz · 已接收 ' +
+        (st.seconds || 0).toFixed(1) + ' s，正在等待制式识别';
+      return;
+    }
+    var pct = st.totalRows ? Math.round(st.rows / st.totalRows * 100) : 0;
+    chip.textContent = '● 接收中 ' + pct + '%  ·  ' + st.rows + ' / ' + st.totalRows + ' 行';
+    $('#rx-live-line').style.top =
+      Math.min(100, st.totalRows ? st.rows / st.totalRows * 100 : 0) + '%';
+    note.textContent = 'VIS ' + (st.vis != null ? st.vis : '—') + ' · ' + st.mode +
+      ' · ' + st.width + '×' + st.height +
+      (st.locked ? ' · 已锁定行同步' : ' · 正在搜索同步脉冲') +
+      ' · ' + st.sr + ' Hz · 已接收 ' + fmtClock(t);
+  }
+
+  function liveFlush() {
+    if (!liveDec) return;
+    var st = liveDec.stats();
+    if (st.width && (!liveImg || liveW !== st.width || liveH !== st.height)) {
+      liveInitCanvas(st.width, st.height);
+    }
+    if (liveImg && st.rows > liveRows) { livePaintRows(liveRows, st.rows); liveRows = st.rows; }
+    liveShowProgress(st);
+  }
+
+  function liveStart(rate, hint) {
+    liveDec = null;
+    if (!liveCapable()) return false;
+    liveDec = SSTV.createStreamDecoder(rate, hint, { block: 4096 });
+    liveImg = null; liveRgb = null; liveRows = 0; liveW = 0; liveH = 0;
+    liveT0 = Date.now();
+    $('#rx-png').disabled = true;
+    $('#rx-stage').classList.add('receiving');
+    $('#rx-live').classList.remove('hidden');
+    $('#rx-live-chip').textContent = '等待 VIS 头…';
+    $('#rx-live-note').textContent = '实时解调 @ ' + rate + ' Hz · 正在等待信号';
+    return true;
+  }
+
+  function liveHide() {
+    $('#rx-stage').classList.remove('receiving');
+    $('#rx-live').classList.add('hidden');
+  }
+
+  /** 录音进行中：喂入新到的一块音频，并把新增行画出来。 */
+  function livePush(chunk) {
+    if (!liveDec) return;
+    try {
+      liveDec.push(chunk);        // 引擎内部立刻复制，chunk 可被浏览器复用
+      liveFlush();
+    } catch (err) {
+      liveDec = null;
+      liveHide();
+      setStatus($('#rx-status'), '实时成像中断：' + err.message +
+        '（可停止录音后用「解码」重新解一次）', 'err');
+    }
+  }
+
+  /**
+   * 停止录音：收尾流式解码器，返回可直接上屏的结果。
+   * 返回 null 表示本次没有启用实时成像；返回 { empty: true } 表示启用了但没解出画面。
+   */
+  function liveFinalize() {
+    var dec = liveDec;
+    liveDec = null;
+    liveHide();
+    if (!dec) return null;
+    try { dec.finish(); } catch (e) { /* 收尾失败就当作没有实时结果 */ }
+    var st = dec.stats();
+    if (!st.width || st.rows <= 0) return { empty: true, stats: st };
+    if (liveImg && st.rows > liveRows) { livePaintRows(liveRows, st.rows); liveRows = st.rows; }
+    var img = dec.image();
+    var copy = new Uint8Array(img.length);
+    copy.set(img);
+    return {
+      image: copy, width: st.width, height: st.height, rows: st.rows,
+      info: { vis: st.vis, mode: st.mode, lines: st.lines, live: true }
+    };
+  }
+
+  function renderMicDiag(probe) {
+    var box = $('#rx-mic-diag'), btn = $('#rx-rec');
+    if (!box || !btn) return;
+    if (!probe) {
+      box.classList.add('hidden');
+      box.innerHTML = '';
+      btn.disabled = false;
+      btn.removeAttribute('title');
+      return;
+    }
+    var html = '<strong>⚠ ' + esc(probe.msg) + '</strong>';
+    if (probe.detail) html += '<p>' + esc(probe.detail) + '</p>';
+    if (probe.fixes && probe.fixes.length) {
+      html += '<ol>' + probe.fixes.map(function (f) {
+        return '<li>' + esc(f) + '</li>';
+      }).join('') + '</ol>';
+    }
+    box.innerHTML = html;
+    box.classList.remove('hidden');
+    // 非安全上下文下按钮根本不可能成功：直接禁用，避免用户反复点击却只见失败
+    var blocked = (probe.kind === 'insecure' || probe.kind === 'no-api');
+    btn.disabled = blocked;
+    if (blocked) btn.setAttribute('title', probe.msg);
+  }
+
+  // 页面加载 / 切到麦克风标签时都刷新一次环境诊断（录音进行中不打扰）
+  function refreshMicDiag() { if (!recProc) renderMicDiag(probeMic()); }
+  refreshMicDiag();
+
   $('#rx-rec').addEventListener('click', async function () {
     var btn = $('#rx-rec');
     if (recProc) { finishRecording(); return; }
 
+    // 环境级拦截：原因明确时不再假装是"浏览器不支持"，也不去弹系统授权框
+    var env = probeMic();
+    if (env) {
+      renderMicDiag(env);
+      setStatus($('#rx-status'), env.msg, 'err');
+      return;
+    }
+
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('浏览器不支持麦克风采集。请使用 http(s) 本地服务器打开，而非双击 file:// 打开。');
-      }
       btn.disabled = true;
       setStatus($('#rx-status'), '正在请求麦克风权限…');
-      recStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-      });
+      // 先按"适合 SSTV 解调"的理想参数请求（关闭 AGC / 回声消除 / 降噪）；
+      // 部分移动设备不接受这些约束，失败则回退到设备默认音频参数。
+      var wantAudio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+      try {
+        recStream = await navigator.mediaDevices.getUserMedia({ audio: wantAudio });
+      } catch (e1) {
+        if (e1 && (e1.name === 'OverconstrainedError' || e1.name === 'TypeError')) {
+          recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } else {
+          throw e1;
+        }
+      }
       recCtx = newAudioCtx();
       var srcNode = recCtx.createMediaStreamSource(recStream);
       recProc = recCtx.createScriptProcessor(4096, 1, 1);
@@ -441,6 +873,9 @@
         for (var i = 0; i < ch.length; i += 8) { var a = Math.abs(ch[i]); if (a > peak) peak = a; }
         var pct = Math.min(100, Math.round(peak * 140));
         $('#rx-meter').style.width = pct + '%';
+        // 边收边解：直接把这一块（原地引用）交给流式解码器，它内部立即复制，
+        // 因此不需要在这里再拷一份。解调 + 增量绘制都是 O(新增样本)。
+        if (liveDec) livePush(ch);
       };
 
       srcNode.connect(recProc);
@@ -455,12 +890,25 @@
         $('#rx-rec-time').textContent = mm + ':' + ss;
       }, 250);
 
+      // 实时成像必须在拿到上下文之后立刻启动：解码器要用**麦克风的原生采样率**
+      // 工作，这样既不必先重采样（省一次转换、少一层误差），也能把解调器与
+      // 音频回调对齐到同一时间轴。
+      var liveOn = $('#rx-live-on') && $('#rx-live-on').checked;
+      if (!liveOn) liveDec = null;
+      else liveStart(recCtx.sampleRate, rxModeHint());
+
       btn.disabled = false;
       btn.textContent = '■ 停止录音';
-      setStatus($('#rx-status'), '录音中…请对准电台音频源', 'ok');
+      renderMicDiag(null);                          // 已成功，清掉诊断提示
+      setStatus($('#rx-status'), liveDec
+        ? '录音中…画面会随信号逐行出现（' + recCtx.sampleRate + ' Hz）'
+        : '录音中…请对准电台音频源', 'ok');
     } catch (err) {
+      // 运行时错误：要让按钮恢复可用以便重试，同时给出精确归因
       btn.disabled = false;
-      setStatus($('#rx-status'), '无法开始录音：' + err.message, 'err');
+      var diag = describeGumError(err);
+      renderMicDiag(diag);
+      setStatus($('#rx-status'), '无法开始录音：' + diag.msg, 'err');
     }
   });
 
@@ -471,6 +919,9 @@
     if (recStream) { recStream.getTracks().forEach(function (t) { t.stop(); }); recStream = null; }
     $('#rx-rec').textContent = '● 开始录音';
     $('#rx-meter').style.width = '0%';
+
+    // 先收尾实时解码器（此后不会再有音频块进来），再去做重采样等耗时工作
+    var liveRes = liveFinalize();
 
     var nativeRate = recCtx ? recCtx.sampleRate : SR;
     busyJob('正在转换录音…', async function () {
@@ -488,36 +939,155 @@
         armRxDecode(mono, '已录制');
       }
       if (recCtx) { recCtx.close(); recCtx = null; }
+    }).then(function () {
+      adoptLiveAndRefine(liveRes);
     }).catch(function (err) {
       setStatus($('#rx-status'), '录音处理失败：' + err.message, 'err');
       if (recCtx) { recCtx.close(); recCtx = null; }
     });
   }
 
+  /**
+   * 停止录音后的收尾。
+   *
+   * 实时路径为了控制单次开销做了分块解调，实测与批量结果一致到 50 dB 以上
+   * （见 test/stream_decode_test.cjs），但"留档/导出"这种要拿去和参考实现比对
+   * 的场合，还是走与批量完全同一条代码路径最稳妥。所以这里：先采用实时画面
+   * （立即可见，用户不用等），再静默跑一次批量精确重解并替换。
+   */
+  function adoptLiveAndRefine(liveRes) {
+    if (!liveRes) return;
+
+    if (liveRes.empty) {
+      var st = liveRes.stats || {};
+      setStatus($('#rx-status'),
+        (st.mode
+          ? '实时成像没能解出完整的一行'
+          : '实时接收未能识别出 VIS 头（已收到 ' + (st.seconds || 0).toFixed(1) + ' s）') +
+        '；可在上方手动指定制式后点「解码」重试', 'err');
+      return;
+    }
+
+    try {
+      renderDecoded(liveRes);
+    } catch (e) {
+      setStatus($('#rx-status'), '实时画面显示失败：' + e.message, 'err');
+      return;
+    }
+    var head = '实时成像完成：' + liveRes.width + '×' + liveRes.height +
+      ' · 逐行收到 ' + liveRes.rows + ' 行';
+    setStatus($('#rx-status'), head + '（正在精确重解校验…）', 'ok');
+
+    try {
+      var t0 = performance.now();
+      var dec = SSTV.decodeSamples(rxSamples, SR, rxModeHint());
+      var ms = Math.round(performance.now() - t0);
+      var bmode = SSTV.modeById(dec.info.mode);
+      // 批量路径按"行号"计数，PD 制式一个同步脉冲带两行
+      var batchRows = dec.info.lines * (bmode && bmode.kind === 'pd' ? 2 : 1);
+
+      if (batchRows < liveRes.rows) {
+        // 批量路径一旦在某一行的窗口里找不到同步脉冲就会停下来，而实时路径会
+        // 向前搜索并重新锁定。所以批量偶尔覆盖得更少（实测 138/240 vs 238/240）。
+        // 这时保留实时结果 —— 它覆盖得更全，且与批量共用同一份逐行数学。
+        setStatus($('#rx-status'), head + ' → 精确重解只覆盖 ' + batchRows +
+          ' 行（少于实时的 ' + liveRes.rows + ' 行），已保留实时结果', 'ok');
+      } else {
+        renderDecoded(dec);
+        setStatus($('#rx-status'), head + ' → 精确重解校验通过：' + dec.info.mode +
+          ' · ' + dec.info.lines + ' 行 · VIS ' +
+          (dec.info.vis != null ? dec.info.vis : '未识别') + '（' + ms + ' ms）', 'ok');
+      }
+    } catch (e) {
+      setStatus($('#rx-status'), head +
+        '；批量精确重解未成功（' + e.message + '），当前显示的是实时结果。' +
+        '可手动指定制式后再点「解码」', 'ok');
+    }
+  }
+
   // ------------------------------------------------------------- decoding --
+
+  /**
+   * 把引擎输出的图像缓冲区包装成 ImageData。
+   *
+   * 引擎返回的是 **RGB**（每像素 3 字节），而 `new ImageData()` 的规范要求
+   * **RGBA**（每像素 4 字节）。直接把 3 字节缓冲区传进去，浏览器会抛：
+   *   Failed to construct 'ImageData': The input data length is not equal
+   *   to (4 * width * height)
+   * 这不是"解码失败"，而是**渲染阶段的类型不匹配** —— 解码本身已经成功了，
+   * 所以错误信息会误导人往"信号不好"的方向排查。此处显式展开为 RGBA，
+   * alpha 固定 255（不透明）。
+   */
+  function rgbToImageData(src, w, h) {
+    var n = w * h;
+    if (src.length === n * 4) {                      // 已经是 RGBA，直接用
+      return new ImageData(new Uint8ClampedArray(src), w, h);
+    }
+    if (src.length !== n * 3) {
+      throw new Error('图像数据长度异常：期望 ' + (n * 3) + '（RGB）或 ' +
+        (n * 4) + '（RGBA）字节，实际 ' + src.length + ' 字节（' + w + '×' + h + '）');
+    }
+    var out = new Uint8ClampedArray(n * 4);
+    for (var i = 0; i < n; i++) {
+      var s = i * 3, d = i * 4;
+      out[d] = src[s];
+      out[d + 1] = src[s + 1];
+      out[d + 2] = src[s + 2];
+      out[d + 3] = 255;
+    }
+    return new ImageData(out, w, h);
+  }
+
+  /**
+   * 把一次解码结果画到预览画布上，并认定它为"当前结果"（解锁 PNG 导出）。
+   * 实时路径与批量路径共用这一个出口，避免两处渲染逻辑分叉。
+   */
+  function renderDecoded(decoded) {
+    var pv = $('#rx-preview');
+    pv.width = decoded.width;
+    pv.height = decoded.height;
+    pv.style.aspectRatio = decoded.width + ' / ' + decoded.height;
+    var g = pv.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    g.putImageData(rgbToImageData(decoded.image, decoded.width, decoded.height), 0, 0);
+    rxDecoded = decoded;
+    // 画布已被完整体接管，实时路径的分块缓冲作废（否则下一次 livePaintRows 会
+    // 拿旧行覆盖回来）
+    liveImg = null; liveRgb = null; liveRows = 0;
+    $('#rx-png').disabled = false;
+  }
+
   $('#rx-decode').addEventListener('click', function () {
     if (!rxSamples) return;
     busyJob('正在解调 SSTV 信号（长制式需数秒）…', function () {
       var t0 = performance.now();
-      rxDecoded = SSTV.decodeSamples(rxSamples, SR, rxModeHint());
+      var decoded = SSTV.decodeSamples(rxSamples, SR, rxModeHint());
       var ms = Math.round(performance.now() - t0);
 
-      var pv = $('#rx-preview');
-      pv.width = rxDecoded.width;
-      pv.height = rxDecoded.height;
-      pv.style.aspectRatio = rxDecoded.width + ' / ' + rxDecoded.height;
-      var g = pv.getContext('2d');
-      var img = new ImageData(new Uint8ClampedArray(rxDecoded.image), rxDecoded.width, rxDecoded.height);
-      g.imageSmoothingEnabled = false;
-      g.putImageData(img, 0, 0);
+      // 「解调」与「显示」是两个阶段。渲染出错时绝不能报成"解码失败" ——
+      // 那会把一个纯前端的数据类型问题，误导成"信号不好/模式不对"，
+      // 让人白白去调天线和模式。这里用 RENDER: 前缀把两者区分开。
+      try {
+        renderDecoded(decoded);
+      } catch (e) {
+        rxDecoded = null;                             // 画布不可信，禁用导出
+        $('#rx-png').disabled = true;
+        throw new Error('RENDER:' + e.message);
+      }
+      liveHide();
 
-      $('#rx-png').disabled = false;
-      var visText = rxDecoded.info && rxDecoded.info.vis != null ? ('VIS ' + rxDecoded.info.vis) : 'VIS 未识别';
+      var visText = decoded.info && decoded.info.vis != null ? ('VIS ' + decoded.info.vis) : 'VIS 未识别';
       setStatus($('#rx-status'),
-        '解码完成：' + rxDecoded.info.mode + ' · ' + rxDecoded.width + '×' + rxDecoded.height +
-        ' · ' + rxDecoded.info.lines + ' 行 · ' + visText + '（' + ms + ' ms）', 'ok');
+        '解码完成：' + decoded.info.mode + ' · ' + decoded.width + '×' + decoded.height +
+        ' · ' + decoded.info.lines + ' 行 · ' + visText + '（' + ms + ' ms）', 'ok');
     }).catch(function (err) {
-      setStatus($('#rx-status'), '解码失败：' + err.message + '（可尝试手动指定模式）', 'err');
+      var msg = String((err && err.message) || err);
+      if (msg.indexOf('RENDER:') === 0) {
+        setStatus($('#rx-status'),
+          '显示失败：' + msg.slice(7) + '（信号本身已正确解出，属渲染问题，非信号问题）', 'err');
+      } else {
+        setStatus($('#rx-status'), '解码失败：' + msg + '（可尝试手动指定模式）', 'err');
+      }
     });
   });
 

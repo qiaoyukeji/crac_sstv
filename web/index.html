@@ -41,14 +41,30 @@
           <label>模式
             <select id="tx-mode" aria-label="发射模式"></select>
           </label>
+          <label>画面适配
+            <select id="tx-fit" aria-label="画面适配方式">
+              <option value="contain">适应 · 完整不裁剪</option>
+              <option value="cover">填充 · 裁掉多余</option>
+              <option value="stretch">拉伸 · 铺满（会变形）</option>
+            </select>
+          </label>
           <div class="mode-info" id="tx-mode-info"></div>
         </div>
 
-        <canvas id="tx-preview" class="preview" width="320" height="256" aria-label="源图像预览"></canvas>
+        <div class="stage" id="tx-stage">
+          <canvas id="tx-preview" class="preview" width="320" height="256" aria-label="待发送图像预览"></canvas>
+          <div class="send-overlay hidden" id="tx-send" role="progressbar"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="发送进度">
+            <div class="send-mask" id="tx-send-mask"></div>
+            <div class="send-line" id="tx-send-line"></div>
+            <div class="send-chip" id="tx-send-chip">准备发送…</div>
+          </div>
+        </div>
+        <p class="fit-note" id="tx-fit-note"></p>
 
         <div class="actions">
           <button class="btn primary" id="tx-gen" type="button">生成音频</button>
-          <button class="btn" id="tx-play" type="button" disabled>▶ 试听</button>
+          <button class="btn" id="tx-play" type="button" disabled>▶ 发送</button>
           <button class="btn" id="tx-wav" type="button" disabled>⤓ 导出 WAV</button>
         </div>
         <p class="status" id="tx-status" role="status"></p>
@@ -74,6 +90,13 @@
           <button class="btn danger" id="rx-rec" type="button">● 开始录音</button>
           <div class="meter" aria-hidden="true"><div class="meter-fill" id="rx-meter"></div></div>
           <span id="rx-rec-time">00:00</span>
+          <div class="row">
+            <label class="check">
+              <input type="checkbox" id="rx-live-on" checked />
+              <span>实时逐行成像（边接收边出画面）</span>
+            </label>
+          </div>
+          <div id="rx-mic-diag" class="diag hidden" role="alert"></div>
         </div>
 
         <div class="row">
@@ -90,7 +113,15 @@
         </div>
         <p class="status" id="rx-status" role="status"></p>
 
-        <canvas id="rx-preview" class="preview" width="320" height="256" aria-label="解码结果预览"></canvas>
+        <div class="stage" id="rx-stage">
+          <canvas id="rx-preview" class="preview" width="320" height="256"
+                  aria-label="解码结果预览（接收时逐行成像）"></canvas>
+          <div class="recv-overlay hidden" id="rx-live" role="status" aria-live="polite">
+            <div class="recv-line" id="rx-live-line"></div>
+            <div class="recv-chip" id="rx-live-chip">等待 VIS 头…</div>
+          </div>
+        </div>
+        <p class="fit-note" id="rx-live-note"></p>
       </div>
     </section>
 
@@ -117,15 +148,32 @@
             <p>直接双击 <code>index.html</code> 即可使用文件发射/接收与导出。全部为本地计算。</p>
           </div>
           <div class="help-card">
+            <h3>画面适配</h3>
+            <p>制式画布尺寸固定（多为 320×256，即 5:4），与照片比例常不一致。<b>适应</b>完整保留、多出部分补黑边；<b>填充</b>填满画布但裁掉溢出；<b>拉伸</b>铺满但会变形。预览框显示的即真正待发送的位图。</p>
+          </div>
+          <div class="help-card">
+            <h3>发送进度</h3>
+            <p>发送时图片上会覆盖一层遮罩：已发送部分保持清晰，未发送部分压暗，中间一条扫描线推移并显示百分比与计时——与你对端正在收到的画面同步。</p>
+          </div>
+          <div class="help-card">
+            <h3>实时逐行成像</h3>
+            <p>用麦克风接收时，画面会<b>随着信号到达自上而下逐行生长</b>，而不是等录音结束才一次性出图——和你对面电台正在发送的进度同步。顶部徽标显示已收到的行数与百分比，扫描线标出正在写入的那一行。停止录音后会自动用批量算法精确重解一遍，保证最终结果与参考实现完全一致。</p>
+          </div>
+          <div class="help-card">
             <h3>麦克风权限</h3>
-            <p>浏览器要求安全上下文。<code>getUserMedia</code> 在 <code>file://</code> 常被拦截，需用本地服务器打开（见下方提示）。</p>
+            <p>浏览器只允许<b>安全上下文</b>使用麦克风：<code>http://localhost</code> 可以，<code>http://局域网IP</code> 与 <code>file://</code> 不行（接口会被直接隐藏）。</p>
           </div>
         </div>
         <div class="note">
-          <b>提示：</b>若需使用麦克风（实时接收），请在本目录运行
-          <code>python -m http.server 8000</code> 然后访问
-          <code>http://localhost:8000</code>。文件导入、播放、WAV/PNG 导出在纯本地（file://）下均可正常工作。
-          长时长制式（如 Martin M1 ≈ 115&nbsp;s）解码需数秒，请耐心等待进度提示。
+          <b>本机使用：</b>在项目根目录运行 <code>python web/serve.py</code>，然后访问
+          <code>https://localhost:8443</code>（或 <code>http://localhost:8000</code>），麦克风可用。<br />
+          <b>手机 / 平板使用：</b>同样运行 <code>python web/serve.py</code>，先按
+          <a href="HTTPS_MIC_GUIDE.md">HTTPS_MIC_GUIDE.md</a> 在设备上安装根证书，
+          再用 <code>https://&lt;本机IP&gt;:8443</code> 打开，麦克风才可用。<br />
+          <b>纯 file:// 双击打开：</b>文件导入、播放、WAV/PNG 导出均正常，仅麦克风不可用。<br />
+          <b>麦克风接收：</b>画面随信号逐行生长；长制式（Martin M1 ≈ 115&nbsp;s）本来就要播这么久，
+          边收边看即可。停止录音后还会再跑一次批量精确重解（数秒），用于校验与导出。<br />
+          <b>文件解码：</b>仍是一次性解调，长制式需数秒，请耐心等待进度提示。
         </div>
       </div>
     </section>

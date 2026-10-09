@@ -1,0 +1,30 @@
+# SSTV Studio 专用 cloudflared 配置
+#
+# 为什么需要这个文件？
+# cloudflared 默认会自动加载 %USERPROFILE%\.cloudflared\config.yml，
+# 而那个文件属于另一个项目（love_timeline.qiaoyukeji.com -> localhost:3000），
+# 其 ingress 最后一条是 `http_status:404`（catch-all 兜底）。
+# 加载它会让本隧道的所有请求都命中 404，回源失败。
+#
+# 用 `cloudflared tunnel --config <本文件> --url ...` 显式指定，
+# 即可避免继承那份无关的 ingress。改完后公网访问恢复正常。
+#
+# 用法（快速隧道，URL 每次随机）：
+#   cloudflared tunnel --config web/tools/cloudflared-sstv.yml \
+#     --url http://127.0.0.1:8000 --protocol http2
+#
+# 注意：origin 必须写 127.0.0.1 而不是 localhost。
+# Python http.server 绑 0.0.0.0 只监听 IPv4，而 cloudflared 会把
+# localhost 优先解析为 IPv6 ::1，导致回源连接被拒（错误码 1033）。
+
+protocol: http2
+
+# 若将来要换成固定的命名隧道（稳定域名，不再随机），
+# 取消下面注释并填入你自己的隧道 ID 与主机名即可：
+#
+# tunnel: <TUNNEL-UUID>
+# credentials-file: C:\Users\kavin\.cloudflared\<TUNNEL-UUID>.json
+# ingress:
+#   - hostname: sstv.qiaoyukeji.com
+#     service: http://127.0.0.1:8000
+#   - service: http_status:404

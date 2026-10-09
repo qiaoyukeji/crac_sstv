@@ -152,6 +152,90 @@ select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-vis
   aspect-ratio: 320 / 256; object-fit: contain;
 }
 
+/* --------------------------------------------- 画面适配提示 + 发送进度 -- */
+/* .stage 让进度遮罩能精确覆盖在画布之上 */
+.stage {
+  position: relative;
+  width: 100%; max-width: 360px;
+  margin: var(--s4) auto 0;
+  line-height: 0;
+}
+.stage .preview { margin: 0; max-width: none; }
+
+.fit-note {
+  margin: var(--s3) 0 0; font-size: 12px; line-height: 1.6;
+  color: var(--muted); font-family: var(--mono);
+  min-height: 1em;
+}
+.fit-note.warn { color: var(--warn); }
+
+.send-overlay {
+  position: absolute; inset: 0; overflow: hidden;
+  border-radius: var(--r-sm); pointer-events: none;
+}
+/* 未发送的部分被压暗；已发送的部分保持清晰 */
+.send-mask {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 100%;
+  background: rgba(4, 8, 12, .62);
+  transition: height .08s linear;
+}
+/* 扫描线：既是进度指示，也复现接收端逐行成像的过程 */
+.send-line {
+  position: absolute; left: 0; right: 0; top: 0; height: 2px; margin-top: -1px;
+  background: linear-gradient(90deg, transparent, var(--primary), var(--accent), transparent);
+  box-shadow: 0 0 12px 2px rgba(45, 212, 191, .65);
+}
+.send-chip {
+  position: absolute; left: 50%; bottom: var(--s3); transform: translateX(-50%);
+  max-width: calc(100% - var(--s4));
+  padding: 5px 12px; border-radius: 999px;
+  background: rgba(6, 10, 14, .88); border: 1px solid var(--border-strong);
+  color: var(--text); font-size: 12px; font-family: var(--mono);
+  white-space: nowrap; line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+.stage.sending .preview { border-color: var(--primary); }
+.stage.sending .send-line { animation: scanpulse 1.1s ease-in-out infinite; }
+@keyframes scanpulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
+
+/* ------------------------------------------- 实时接收：逐行成像遮罩 ----- */
+/* 与 .send-overlay 同构：都是"覆盖在画布上的一层时间指示"。区别是发送侧压暗
+   未发送区域（图早就有了），接收侧不遮挡任何东西（未收到的区域本来就是空的，
+   画布上已经先铺了暗底），只留一条扫描线标出正在写入的那一行。 */
+.recv-overlay {
+  position: absolute; inset: 0; overflow: hidden;
+  border-radius: var(--r-sm); pointer-events: none;
+}
+.recv-line {
+  position: absolute; left: 0; right: 0; top: 0; height: 2px; margin-top: -1px;
+  background: linear-gradient(90deg, transparent, var(--primary), var(--accent), transparent);
+  box-shadow: 0 0 14px 2px rgba(56, 189, 248, .7);
+  transition: top .1s linear;
+}
+.recv-chip {
+  position: absolute; left: 50%; bottom: var(--s3); transform: translateX(-50%);
+  max-width: calc(100% - var(--s4));
+  padding: 5px 12px; border-radius: 999px;
+  background: rgba(6, 10, 14, .88); border: 1px solid var(--border-strong);
+  color: var(--text); font-size: 12px; font-family: var(--mono);
+  white-space: nowrap; line-height: 1.3; font-variant-numeric: tabular-nums;
+}
+.stage.receiving .preview {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, .22), 0 0 22px rgba(56, 189, 248, .18);
+}
+.stage.receiving .recv-line { animation: scanpulse 1.1s ease-in-out infinite; }
+
+/* --------------------------------------------------------- checkbox ----- */
+.check {
+  flex-direction: row; align-items: center; gap: var(--s2);
+  font-size: 13px; color: var(--text); cursor: pointer; user-select: none;
+}
+.check input { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; }
+
 /* ------------------------------------------------------- segmented ----- */
 .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 4px; gap: 4px; }
 .seg-btn {
@@ -194,6 +278,28 @@ select:focus-visible, .btn:focus-visible, .tab:focus-visible, .seg-btn:focus-vis
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
   .spinner { animation: spin 1.6s linear infinite; }
+}
+
+/* --------------------------------------------------- mic diagnostics box -- */
+.diag {
+  margin-top: var(--s3);
+  padding: var(--s3) var(--s4);
+  border: 1px solid rgba(251,191,36,.45);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-md);
+  background: rgba(251,191,36,.08);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.diag strong { display: block; color: var(--warn); font-size: 13.5px; margin-bottom: var(--s1); }
+.diag p { margin: var(--s1) 0 0; color: var(--muted); }
+.diag ol { margin: var(--s2) 0 0; padding-left: 1.35em; color: var(--text); }
+.diag ol li { margin-bottom: var(--s1); }
+.diag code {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 5px; padding: 1px 5px; color: var(--accent);
 }
 
 footer { text-align: center; color: var(--muted); font-size: 12px; padding: var(--s4); }

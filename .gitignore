@@ -13,6 +13,8 @@ env/
 
 # 验证脚本生成的样张/日志
 sstv_proto/output/
+web/test/shots/
+web/test/tmp/
 *.log
 
 # ------------------------------------------------------------- Node / Web --
@@ -41,6 +43,13 @@ local.properties
 .class
 .idea/
 *.iml
+
+# ------------------------------------------------- 本地自签证书（含私钥）--
+# ca.key 是本地 CA 的根私钥，绝不能进版本库；证书的 SAN 里写死了本机内网 IP，
+# 也属于机器相关产物。首次运行 `python web/serve.py`（或 web/tools/gen_cert.py）
+# 会自动重新生成，因此无需入库。详见 web/HTTPS_MIC_GUIDE.md
+certs/
+*.mobileconfig
 
 # -------------------------------------------------------------------- OS --
 .DS_Store
